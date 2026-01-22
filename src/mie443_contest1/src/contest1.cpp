@@ -15,6 +15,9 @@
 
 using namespace std::chrono_literals;
 
+// Utility functions for angle conversions
+inline double rad2deg(double rad) { return rad * 180.0 / M_PI; }
+inline double deg2rad(double deg) { return deg * M_PI / 180.0; }
 
 class Contest1Node : public rclcpp::Node
 {
@@ -46,6 +49,13 @@ public:
         angular_ = 0.0;
         linear_ = 0.0;
 
+        // Initialize bumper states
+        bumpers_["bump_front_left"] = false;
+        bumpers_["bump_front_center"] = false;
+        bumpers_["bump_front_right"] = false;
+        bumpers_["bump_left"] = false;
+        bumpers_["bump_right"] = false;
+
         RCLCPP_INFO(this->get_logger(), "Contest 1 node initialized. Running for 480 seconds.");
     }
 
@@ -57,12 +67,31 @@ private:
 
     void odomCallback(const nav_msgs::msg::Odometry::SharedPtr odom)
     {
-        // implement your code here
+        pos_x_ = odom->pose.pose.position.x;
+        pos_y_ = odom->pose.pose.position.y;
+
+        yaw_ = tf2::getYaw(odom->pose.pose.orientation);
+
+        RCLCPP_INFO(this->get_logger(), "Position: (%.2f, %.2f), Yaw: %.2f degrees", pos_x_, pos_y_, rad2deg(yaw_));
     }
 
     void hazardCallback(const irobot_create_msgs::msg::HazardDetectionVector::SharedPtr hazard_vector)
     {
-        // implement your code here
+        for (auto &[key, value] : bumpers_)
+        {
+            value = false;
+        }
+
+        for (const auto &detection : hazard_vector->detections)
+        {
+            // HazardDetection types: BUMP, CLIFF, STALL, WHEEL_DROP, etc.
+            if (detection.type == irobot_create_msgs::msg::HazardDetection::BUMP)
+            {
+                bumpers_[detection.header.frame_id] = true;
+                RCLCPP_WARN(this->get_logger(), "Bumper triggered: %s",
+                            detection.header.frame_id.c_str());
+            }
+        }
     }
 
     void controlLoop()
@@ -72,7 +101,8 @@ private:
         double seconds_elapsed = (current_time - start_time_).seconds();
 
         // Check if 480 seconds (8 minutes) have elapsed
-        if (seconds_elapsed >= 480.0) {
+        if (seconds_elapsed >= 480.0)
+        {
             RCLCPP_INFO(this->get_logger(), "Contest time completed (480 seconds). Stopping robot.");
 
             // Stop the robot
@@ -88,6 +118,7 @@ private:
         }
 
         // Implement your exploration code here
+        
 
         // Set velocity command
         geometry_msgs::msg::TwistStamped vel;
@@ -108,9 +139,13 @@ private:
     rclcpp::Time start_time_;
     float angular_;
     float linear_;
+    double pos_x_;
+    double pos_y_;
+    double yaw_;
+    std::map<std::string, bool> bumpers_;
 };
 
-int main(int argc, char** argv)
+int main(int argc, char **argv)
 {
     rclcpp::init(argc, argv);
     auto node = std::make_shared<Contest1Node>();
