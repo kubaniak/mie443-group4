@@ -48,6 +48,13 @@ public:
         start_time_ = this->now();
         angular_ = 0.0;
         linear_ = 0.0;
+        pos_x_ = 0.0;
+        pos_y_ = 0.0;
+        yaw_ = 0.0;
+        minLaserDist_ = std::numeric_limits<float>::infinity();
+        nLasers_ = 0;
+        desiredNLasers_ = 0;
+        desiredAngle_ = 5;
 
         // Initialize bumper states
         bumpers_["bump_front_left"] = false;
@@ -62,7 +69,10 @@ public:
 private:
     void laserCallback(const sensor_msgs::msg::LaserScan::SharedPtr scan)
     {
-        // implement your code here
+        nLasers_ = (scan->angle_max - scan->angle_min) / scan->angle_increment;
+        laserRange_ = scan->ranges;
+        desiredNLasers_ = deg2rad(desiredAngle_) / scan->angle_increment;
+        RCLCPP_INFO(this->get_logger(), "Size of laser scan array: %d, and size of offset: %d", nLasers_, desiredNLasers_);
     }
 
     void odomCallback(const nav_msgs::msg::Odometry::SharedPtr odom)
@@ -72,7 +82,7 @@ private:
 
         yaw_ = tf2::getYaw(odom->pose.pose.orientation);
 
-        RCLCPP_INFO(this->get_logger(), "Position: (%.2f, %.2f), Yaw: %.2f degrees", pos_x_, pos_y_, rad2deg(yaw_));
+        // RCLCPP_INFO(this->get_logger(), "Position: (%.2f, %.2f), Yaw: %.2f degrees", pos_x_, pos_y_, rad2deg(yaw_));
     }
 
     void hazardCallback(const irobot_create_msgs::msg::HazardDetectionVector::SharedPtr hazard_vector)
@@ -118,7 +128,7 @@ private:
         }
 
         // Implement your exploration code here
-        bool any_bumper_pressed = false;
+        /* bool any_bumper_pressed = false;
         for (const auto &[key, value] : bumpers_){
             if (value){
                 any_bumper_pressed = true;
@@ -141,7 +151,7 @@ private:
             linear_ = 0.0;
             rclcpp::shutdown();
             return;
-        }
+        } */
 
 
 
@@ -168,6 +178,11 @@ private:
     double pos_y_;
     double yaw_;
     std::map<std::string, bool> bumpers_;
+    float minLaserDist_;
+    int32_t nLasers_;
+    int32_t desiredNLasers_;
+    int32_t desiredAngle_;
+    std::vector<float> laserRange_;
 };
 
 int main(int argc, char **argv)
