@@ -119,13 +119,29 @@ private:
 
         // Implement your exploration code here
         bool any_bumper_pressed = false;
-        for (const auto &[key, value] : bumpers_) {
-            if (value) {
+        for (const auto &[key, value] : bumpers_){
+            if (value){
                 any_bumper_pressed = true;
                 break;
             }
         }
-        if (pos_x_ < 0.5 && yaw_ < M_PI / 12 && !any_bumper_pressed) {}
+        if (pos_x_<0.5 && yaw_<M_PI/12 && !any_bumper_pressed)
+        {
+            angular_=0.0;
+            linear_=0.2;
+        }
+        else if (yaw_>M_PI/2 && pos_x_> 0.5 && !any_bumper_pressed)
+        {
+            angular_ = M_PI/6;
+            linear_ = 0.0;
+        }
+        else
+        {
+            angular_ = 0.0;
+            linear_ = 0.0;
+            rclcpp::shutdown();
+            return;
+        }
 
 
 
