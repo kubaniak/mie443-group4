@@ -118,7 +118,16 @@ private:
         }
 
         // Implement your exploration code here
-        
+        bool any_bumper_pressed = false;
+        for (const auto &[key, value] : bumpers_) {
+            if (value) {
+                any_bumper_pressed = true;
+                break;
+            }
+        }
+        if (pos_x_ < 0.5 && yaw_ < M_PI / 12 && !any_bumper_pressed) {}
+
+
 
         // Set velocity command
         geometry_msgs::msg::TwistStamped vel;
