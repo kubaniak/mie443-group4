@@ -72,7 +72,26 @@ private:
         nLasers_ = (scan->angle_max - scan->angle_min) / scan->angle_increment;
         laserRange_ = scan->ranges;
         desiredNLasers_ = deg2rad(desiredAngle_) / scan->angle_increment;
-        RCLCPP_INFO(this->get_logger(), "Size of laser scan array: %d, and size of offset: %d", nLasers_, desiredNLasers_);
+        // RCLCPP_INFO(this->get_logger(), "Size of laser scan array: %d, and size of offset: %d", nLasers_, desiredNLasers_);
+
+        // LIDAR has 90 degree offset, so we need to adjust indices accordingly
+        float laser_offset = deg2rad(-90.0);
+        uint32_t front_idx = (laser_offset - scan->angle_min) / scan->angle_increment;
+
+        minLaserDist_ = std::numeric_limits<float>::infinity();
+
+        // Find minimum laser distance in the desired angle range
+        if (deg2rad(desiredAngle_) < scan->angle_max && deg2rad(desiredAngle_) > scan->angle_min)
+        {
+            for (uint32_t laser_idx = front_idx - desiredNLasers_; laser_idx < front_idx + desiredNLasers_; ++laser_idx)
+            {
+                minLaserDist_ = std::min(minLaserDist_, laserRange_[laser_idx]);
+            }
+        } else {
+            for (uint32_t laser_idx = 0; laser_idx < nLasers_; ++laser_idx) {
+                minLaserDist_ = std::min(minLaserDist_, laserRange_[laser_idx]);
+            }
+        }
     }
 
     void odomCallback(const nav_msgs::msg::Odometry::SharedPtr odom)
@@ -127,33 +146,49 @@ private:
             return;
         }
 
+        RCLCPP_INFO(this->get_logger(), "Position: (%.2f, %.2f), Orientation: %.2f rad or %.2f deg, Min LIDAR Dist: %.2f m",
+                    pos_x_, pos_y_, yaw_, rad2deg(yaw_), minLaserDist_);
+
         // Implement your exploration code here
-        /* bool any_bumper_pressed = false;
+        bool any_bumper_pressed = false;
         for (const auto &[key, value] : bumpers_){
             if (value){
                 any_bumper_pressed = true;
                 break;
             }
         }
-        if (pos_x_<0.5 && yaw_<M_PI/12 && !any_bumper_pressed)
+        if (pos_x_ < 0.5 && yaw_ < M_PI/12 && !any_bumper_pressed && minLaserDist_ > 0.7)
         {
             angular_=0.0;
             linear_=0.2;
         }
-        else if (yaw_>M_PI/2 && pos_x_> 0.5 && !any_bumper_pressed)
+        else if (yaw_ < M_PI/2 && pos_x_ >= 0.5 && !any_bumper_pressed && minLaserDist_ > 0.5)
         {
             angular_ = M_PI/6;
             linear_ = 0.0;
         }
-        else
+        else if (minLaserDist_ < 1.0 && !any_bumper_pressed)
+        {
+            linear_ = 0.1;
+            if (yaw_ < 17/36*M_PI || pos_x_ < 0.6)
+            {
+                angular_ = M_PI/12;
+            } else if (yaw_ >= 19/36*M_PI || pos_x_ < 0.4)
+            {
+                angular_ = -M_PI/12;
+            } else
+            {
+                angular_ = 0.0;
+            }
+            
+        } 
+        else 
         {
             angular_ = 0.0;
             linear_ = 0.0;
             rclcpp::shutdown();
             return;
-        } */
-
-
+        }
 
         // Set velocity command
         geometry_msgs::msg::TwistStamped vel;
