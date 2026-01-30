@@ -54,7 +54,7 @@ public:
         minLaserDist_ = std::numeric_limits<float>::infinity();
         nLasers_ = 0;
         desiredNLasers_ = 0;
-        desiredAngle_ = 5;
+        desiredAngle_ = 30;
 
         // Initialize bumper states
         bumpers_["bump_front_left"] = false;
@@ -62,6 +62,18 @@ public:
         bumpers_["bump_front_right"] = false;
         bumpers_["bump_left"] = false;
         bumpers_["bump_right"] = false;
+        
+        // Initialize turning state
+        is_turning_ = false;
+        target_yaw_ = 0.0;
+        turn_direction_ = 1;
+        
+        // Initialize bumper collision state
+        is_reversing_ = false;
+        reverse_duration_ = 0.5;  // Reverse for 0.5 seconds
+        
+        // Seed random number generator
+        srand(time(NULL));
 
         RCLCPP_INFO(this->get_logger(), "Contest 1 node initialized. Running for 480 seconds.");
     }
@@ -149,45 +161,103 @@ private:
         RCLCPP_INFO(this->get_logger(), "Position: (%.2f, %.2f), Orientation: %.2f rad or %.2f deg, Min LIDAR Dist: %.2f m",
                     pos_x_, pos_y_, yaw_, rad2deg(yaw_), minLaserDist_);
 
-        // Implement your exploration code here
+        // Check for bumper collision first
         bool any_bumper_pressed = false;
-        for (const auto &[key, value] : bumpers_){
-            if (value){
+        for (const auto &[key, value] : bumpers_)
+        {
+            if (value)
+            {
                 any_bumper_pressed = true;
                 break;
             }
         }
-        if (pos_x_ < 0.5 && yaw_ < M_PI/12 && !any_bumper_pressed && minLaserDist_ > 0.7)
+        
+        // Exploration logic: bumper override, then turning, then obstacle avoidance, then forward
+        if (any_bumper_pressed && !is_reversing_)
         {
-            angular_=0.0;
-            linear_=0.2;
-        }
-        else if (yaw_ < M_PI/2 && pos_x_ >= 0.5 && !any_bumper_pressed && minLaserDist_ > 0.5)
-        {
-            angular_ = M_PI/6;
-            linear_ = 0.0;
-        }
-        else if (minLaserDist_ < 1.0 && !any_bumper_pressed)
-        {
-            linear_ = 0.1;
-            if (yaw_ < 17/36*M_PI || pos_x_ < 0.6)
-            {
-                angular_ = M_PI/12;
-            } else if (yaw_ >= 19/36*M_PI || pos_x_ < 0.4)
-            {
-                angular_ = -M_PI/12;
-            } else
-            {
-                angular_ = 0.0;
-            }
-            
-        } 
-        else 
-        {
+            // Bumper hit! Start reversing
+            is_reversing_ = true;
+            reverse_start_time_ = this->now();
             angular_ = 0.0;
+            linear_ = -0.15;  // Reverse at 0.15 m/s
+            is_turning_ = false;  // Cancel any ongoing turn
+            RCLCPP_WARN(this->get_logger(), "Bumper collision! Reversing...");
+        }
+        else if (is_reversing_)
+        {
+            // Currently reversing - check if duration elapsed
+            double reverse_elapsed = (this->now() - reverse_start_time_).seconds();
+            
+            if (reverse_elapsed >= reverse_duration_)
+            {
+                // Finished reversing - start turning
+                is_reversing_ = false;
+                turn_direction_ = (rand() % 2 == 0) ? 1 : -1;  // Random direction
+                target_yaw_ = yaw_ + turn_direction_ * M_PI / 2;  // Turn 90 degrees
+                
+                // Normalize target yaw to [-pi, pi]
+                while (target_yaw_ > M_PI) target_yaw_ -= 2 * M_PI;
+                while (target_yaw_ < -M_PI) target_yaw_ += 2 * M_PI;
+                
+                is_turning_ = true;
+                angular_ = turn_direction_ * M_PI / 4;
+                linear_ = 0.0;
+                RCLCPP_INFO(this->get_logger(), "Reverse complete. Turning %s 90 degrees.",
+                           turn_direction_ > 0 ? "left" : "right");
+            }
+            else
+            {
+                // Continue reversing
+                angular_ = 0.0;
+                linear_ = -0.15;
+            }
+        }
+        else if (is_turning_)
+        {
+            // Currently turning - check if we've reached target yaw
+            double yaw_diff = target_yaw_ - yaw_;
+            
+            // Normalize angle difference to [-pi, pi]
+            while (yaw_diff > M_PI) yaw_diff -= 2 * M_PI;
+            while (yaw_diff < -M_PI) yaw_diff += 2 * M_PI;
+            
+            if (std::abs(yaw_diff) < 0.1)  // Within tolerance
+            {
+                // Finished turning
+                is_turning_ = false;
+                angular_ = 0.0;
+                linear_ = 0.2;  // Resume forward movement
+                RCLCPP_INFO(this->get_logger(), "Turn complete. Resuming forward motion.");
+            }
+            else
+            {
+                // Continue turning
+                angular_ = turn_direction_ * M_PI / 4;  // Turn at 45 deg/s
+                linear_ = 0.0;
+            }
+        }
+        else if (minLaserDist_ < 0.8)
+        {
+            // Obstacle detected - start turning 90 degrees in random direction
+            turn_direction_ = (rand() % 2 == 0) ? 1 : -1;  // Randomly choose left (1) or right (-1)
+            target_yaw_ = yaw_ + turn_direction_ * M_PI / 2;  // Add 90 degrees
+            
+            // Normalize target yaw to [-pi, pi]
+            while (target_yaw_ > M_PI) target_yaw_ -= 2 * M_PI;
+            while (target_yaw_ < -M_PI) target_yaw_ += 2 * M_PI;
+            
+            is_turning_ = true;
+            angular_ = turn_direction_ * M_PI / 4;  // Start turning at 45 deg/s
             linear_ = 0.0;
-            rclcpp::shutdown();
-            return;
+            
+            RCLCPP_INFO(this->get_logger(), "Obstacle detected! Turning %s 90 degrees.",
+                       turn_direction_ > 0 ? "left" : "right");
+        }
+        else
+        {
+            // No obstacle - move forward
+            angular_ = 0.0;
+            linear_ = 0.2;
         }
 
         // Set velocity command
@@ -218,6 +288,16 @@ private:
     int32_t desiredNLasers_;
     int32_t desiredAngle_;
     std::vector<float> laserRange_;
+    
+    // State variables for turning behavior
+    bool is_turning_;
+    double target_yaw_;
+    int turn_direction_;
+    
+    // State variables for bumper collision handling
+    bool is_reversing_;
+    rclcpp::Time reverse_start_time_;
+    double reverse_duration_;  // How long to reverse (seconds)
 };
 
 int main(int argc, char **argv)
