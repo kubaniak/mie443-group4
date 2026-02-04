@@ -9,6 +9,7 @@
 #include "geometry_msgs/msg/twist_stamped.hpp"
 #include "sensor_msgs/msg/laser_scan.hpp"
 #include "nav_msgs/msg/odometry.hpp"
+#include "nav_msgs/msg/occupancy_grid.hpp"
 #include "irobot_create_msgs/msg/hazard_detection_vector.hpp"
 #include "tf2/utils.h"
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
@@ -39,6 +40,10 @@ public:
         odom_sub_ = this->create_subscription<nav_msgs::msg::Odometry>(
             "/odom", rclcpp::SensorDataQoS(),
             std::bind(&Contest1Node::odomCallback, this, std::placeholders::_1));
+
+        map_sub_ = this->create_subscription<nav_msgs::msg::OccupancyGrid>(
+            "/map", rclcpp::QoS(rclcpp::KeepLast(1)).transient_local(),
+            std::bind(&Contest1Node::mapCallback, this, std::placeholders::_1));
 
         // Timer for main control loop at 10 Hz
         timer_ = this->create_wall_timer(
@@ -133,6 +138,105 @@ private:
                             detection.header.frame_id.c_str());
             }
         }
+    }
+
+    void mapCallback(const nav_msgs::msg::OccupancyGrid::SharedPtr map)
+    {
+        // This function analyzes the map to find the least explored direction.
+        // It divides the area around the robot into 8 slices (22.5 degrees each)
+        // and calculates the average occupancy value for each slice within a 2-meter radius.
+        // A lower average value indicates a less explored area (more unknown cells).
+
+        const double radius = 2.0; // 2-meter radius
+        const int num_slices = 16; // 8 slices of 22.5 degrees each
+        std::vector<double> slice_scores(num_slices, 0.0);
+        std::vector<int> slice_counts(num_slices, 0);
+
+        double map_resolution = map->info.resolution;
+        double map_origin_x = map->info.origin.position.x;
+        double map_origin_y = map->info.origin.position.y;
+
+        // Convert robot's world coordinates to map coordinates
+        int robot_map_x = static_cast<int>((pos_x_ - map_origin_x) / map_resolution);
+        int robot_map_y = static_cast<int>((pos_y_ - map_origin_y) / map_resolution);
+
+        int radius_in_cells = static_cast<int>(radius / map_resolution);
+
+        // Iterate over a square bounding box around the robot
+        for (int y = robot_map_y - radius_in_cells; y <= robot_map_y + radius_in_cells; ++y)
+        {
+            for (int x = robot_map_x - radius_in_cells; x <= robot_map_x + radius_in_cells; ++x)
+            {
+                // Check if the cell is within the map boundaries
+                if (x < 0 || x >= (int)map->info.width || y < 0 || y >= (int)map->info.height)
+                {
+                    continue;
+                }
+
+                // Check if the cell is within the circular radius
+                double dist_x = (x - robot_map_x) * map_resolution;
+                double dist_y = (y - robot_map_y) * map_resolution;
+                if (std::sqrt(dist_x * dist_x + dist_y * dist_y) > radius)
+                {
+                    continue;
+                }
+
+                // Calculate angle of the cell relative to the robot's current orientation
+                double angle = std::atan2(dist_y, dist_x) - yaw_;
+                
+                // Normalize angle to [0, 2*PI)
+                while (angle < 0) angle += 2 * M_PI;
+                while (angle >= 2 * M_PI) angle -= 2 * M_PI;
+
+                // Determine which slice the cell belongs to
+                int slice_index = static_cast<int>(angle / (2 * M_PI / num_slices));
+
+                // Get occupancy value and add to the slice's score
+                int map_index = y * map->info.width + x;
+                slice_scores[slice_index] += map->data[map_index];
+                slice_counts[slice_index]++;
+            }
+        }
+
+        double min_score = std::numeric_limits<double>::max();
+        int least_explored_slice = -1;
+
+        RCLCPP_INFO(this->get_logger(), "--- Exploration Slices ---");
+        for (int i = 0; i < num_slices; ++i)
+        {
+            double avg_score = (slice_counts[i] > 0) ? slice_scores[i] / slice_counts[i] : 100.0;
+            double slice_angle_deg = (i * 360.0/num_slices) + (360.0/num_slices / 2.0);
+            RCLCPP_INFO(this->get_logger(), "Slice %d (%.1f deg): Avg. Confidence = %.2f", i, slice_angle_deg, avg_score);
+
+            if (avg_score < min_score)
+            {
+                min_score = avg_score;
+                least_explored_slice = i;
+            }
+        }
+
+        if (least_explored_slice != -1)
+        {
+            double best_direction_deg = (least_explored_slice * 360.0/num_slices) + (360.0/num_slices / 2.0);
+            RCLCPP_INFO(this->get_logger(), "Least explored direction is slice %d (yaw-relative: %.1f deg)", least_explored_slice, best_direction_deg);
+        }
+        RCLCPP_INFO(this->get_logger(), "--------------------------");
+
+        // Is this approach a good idea?
+        // Yes, this is a solid foundational concept for a frontier-based exploration strategy.
+        // By identifying the direction with the most unknown cells (lowest average confidence),
+        // we can direct the robot to explore new areas, which is the core idea of mapping.
+        //
+        // Potential improvements:
+        // 1. Frontier Clustering: Instead of just a direction, we could identify and cluster contiguous
+        //    frontier cells to find the largest, most promising area to explore.
+        // 2. Cost-Benefit Analysis: We could weigh the "reward" of exploring a frontier (its size)
+        //    against the "cost" of reaching it (the distance).
+        // 3. Integration with Navigation: The chosen direction needs to be translated into a goal
+        //    for a navigation system (like Nav2) to drive the robot there safely.
+        //
+        // For this contest, this "pizza slice" method is a clever and efficient way to make
+        // an initial exploration decision without the complexity of a full frontier-based planner.
     }
 
     void controlLoop()
@@ -274,6 +378,7 @@ private:
     rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr laser_sub_;
     rclcpp::Subscription<irobot_create_msgs::msg::HazardDetectionVector>::SharedPtr hazard_sub_;
     rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
+    rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr map_sub_;
     rclcpp::TimerBase::SharedPtr timer_;
 
     rclcpp::Time start_time_;
