@@ -298,10 +298,14 @@ private:
             is_turning_ = false;  // Cancel any ongoing turn
             
             // Store which bumper was hit
-            if (bumpers_["bump_front_left"] || bumpers_["bump_left"])
-                last_bumper_hit_ = "left";
-            else if (bumpers_["bump_front_right"] || bumpers_["bump_right"])
-                last_bumper_hit_ = "right";
+            if (bumpers_["bump_left"])
+                last_bumper_hit_ = "side_left";
+            else if (bumpers_["bump_right"])
+                last_bumper_hit_ = "side_right";
+            else if (bumpers_["bump_front_left"])
+                last_bumper_hit_ = "front_left";
+            else if (bumpers_["bump_front_right"])
+                last_bumper_hit_ = "front_right";
             else if (bumpers_["bump_front_center"])
                 last_bumper_hit_ = "center";
             else
@@ -319,11 +323,29 @@ private:
                 // Finished reversing - start turning
                 is_reversing_ = false;
                 
-                // Determine turn direction based on which bumper was hit
-                if (last_bumper_hit_ == "left")
+                // Determine turn direction and angle based on which bumper was hit
+                double turn_angle_deg;
+                
+                if (last_bumper_hit_ == "side_left")
+                {
                     turn_direction_ = -1;  // Turn right (away from left obstacle)
-                else if (last_bumper_hit_ == "right")
+                    turn_angle_deg = 5.0 + (rand() % 11);  // Random angle between 5-15 degrees
+                }
+                else if (last_bumper_hit_ == "side_right")
+                {
                     turn_direction_ = 1;   // Turn left (away from right obstacle)
+                    turn_angle_deg = 5.0 + (rand() % 11);  // Random angle between 5-15 degrees
+                }
+                else if (last_bumper_hit_ == "front_left")
+                {
+                    turn_direction_ = -1;  // Turn right (away from left obstacle)
+                    turn_angle_deg = 30.0 + (rand() % 91);  // Random angle between 30-120 degrees
+                }
+                else if (last_bumper_hit_ == "front_right")
+                {
+                    turn_direction_ = 1;   // Turn left (away from right obstacle)
+                    turn_angle_deg = 30.0 + (rand() % 91);  // Random angle between 30-120 degrees
+                }
                 else if (last_bumper_hit_ == "center")
                 {
                     // Center bumper - use laser obstacle detection logic
@@ -331,11 +353,15 @@ private:
                         turn_direction_ = -1;  // Turn right
                     else
                         turn_direction_ = 1;   // Turn left
+                    turn_angle_deg = 30.0 + (rand() % 91);  // Random angle between 30-120 degrees
                 }
                 else
+                {
                     turn_direction_ = (rand() % 2 == 0) ? 1 : -1;  // Fallback to random
+                    turn_angle_deg = 30.0 + (rand() % 91);  // Random angle between 30-120 degrees
+                }
                 
-                target_yaw_ = yaw_ + turn_direction_ * deg2rad(30.0 + (rand() % 91));  // Random angle between 30-120 degrees
+                target_yaw_ = yaw_ + turn_direction_ * deg2rad(turn_angle_deg);
                 
                 // Normalize target yaw to [-pi, pi]
                 while (target_yaw_ > M_PI) target_yaw_ -= 2 * M_PI;
