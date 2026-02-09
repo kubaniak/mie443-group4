@@ -41,10 +41,6 @@ public:
             "/odom", rclcpp::SensorDataQoS(),
             std::bind(&Contest1Node::odomCallback, this, std::placeholders::_1));
 
-        map_sub_ = this->create_subscription<nav_msgs::msg::OccupancyGrid>(
-            "/map", rclcpp::QoS(rclcpp::KeepLast(1)).transient_local(),
-            std::bind(&Contest1Node::mapCallback, this, std::placeholders::_1));
-
         // Timer for main control loop at 10 Hz
         timer_ = this->create_wall_timer(
             100ms, std::bind(&Contest1Node::controlLoop, this));
@@ -63,6 +59,12 @@ public:
         laserDist90Left_ = std::numeric_limits<float>::infinity();
         laserDist90Right_ = std::numeric_limits<float>::infinity();
         // temp = 0;
+        
+        // Wall-following parameters
+        desired_wall_distance_ = 0.6;  // Target distance from right wall (meters)
+        wall_following_gain_ = 0.8;     // Proportional gain for steering correction
+        wall_detect_threshold_ = 1.0;   // Max distance to consider a wall present
+        right_wall_distance_ = std::numeric_limits<float>::infinity();
 
         // Initialize bumper states
         bumpers_["bump_front_left"] = false;
@@ -102,10 +104,34 @@ private:
         laserDist90Right_ = laserRange_[right_90_idx];
         // RCLCPP_INFO(this->get_logger(), "Laser 90° Left: %.2f m, 90° Right: %.2f m", 
         //             laserDist90Left_, laserDist90Right_);
-
-        // LIDAR has 90 degree offset, so we need to adjust indices accordingly
+        
+        // Calculate average distance to right wall (from 20° to 70° on the right side)
+        // Right side is at lower indices (0 is rightmost)
         float laser_offset = deg2rad(-90.0);
         uint32_t front_idx = (laser_offset - scan->angle_min) / scan->angle_increment;
+        uint32_t right_start_angle = deg2rad(20.0);  // 20 degrees to the right
+        uint32_t right_end_angle = deg2rad(70.0);    // 70 degrees to the right
+        uint32_t right_start_idx = (right_start_angle / scan->angle_increment);
+        uint32_t right_end_idx = (right_end_angle / scan->angle_increment);
+        
+        right_wall_distance_ = std::numeric_limits<float>::infinity();
+        int valid_readings = 0;
+        float sum_distance = 0.0;
+        
+        for (uint32_t idx = right_start_idx; idx <= right_end_idx && idx < nLasers_; ++idx) {
+            if (std::isfinite(laserRange_[idx]) && laserRange_[idx] > 0.1) {
+                sum_distance += laserRange_[idx];
+                valid_readings++;
+            }
+        }
+        
+        if (valid_readings > 0) {
+            right_wall_distance_ = sum_distance / valid_readings;
+        }
+
+        // LIDAR has 90 degree offset, so we need to adjust indices accordingly
+        laser_offset = deg2rad(-90.0);
+        front_idx = (laser_offset - scan->angle_min) / scan->angle_increment;
 
         minLaserDist_ = std::numeric_limits<float>::infinity();
 
@@ -152,104 +178,6 @@ private:
         }
     }
 
-    void mapCallback(const nav_msgs::msg::OccupancyGrid::SharedPtr map)
-    {
-/*         // This function analyzes the map to find the least explored direction.
-        // It divides the area around the robot into 8 slices (22.5 degrees each)
-        // and calculates the average occupancy value for each slice within a 2-meter radius.
-        // A lower average value indicates a less explored area (more unknown cells).
-
-        const double radius = 2.0; // 2-meter radius
-        const int num_slices = 16; // 8 slices of 22.5 degrees each
-        std::vector<double> slice_scores(num_slices, 0.0);
-        std::vector<int> slice_counts(num_slices, 0);
-
-        double map_resolution = map->info.resolution;
-        double map_origin_x = map->info.origin.position.x;
-        double map_origin_y = map->info.origin.position.y;
-
-        // Convert robot's world coordinates to map coordinates
-        int robot_map_x = static_cast<int>((pos_x_ - map_origin_x) / map_resolution);
-        int robot_map_y = static_cast<int>((pos_y_ - map_origin_y) / map_resolution);
-
-        int radius_in_cells = static_cast<int>(radius / map_resolution);
-
-        // Iterate over a square bounding box around the robot
-        for (int y = robot_map_y - radius_in_cells; y <= robot_map_y + radius_in_cells; ++y)
-        {
-            for (int x = robot_map_x - radius_in_cells; x <= robot_map_x + radius_in_cells; ++x)
-            {
-                // Check if the cell is within the map boundaries
-                if (x < 0 || x >= (int)map->info.width || y < 0 || y >= (int)map->info.height)
-                {
-                    continue;
-                }
-
-                // Check if the cell is within the circular radius
-                double dist_x = (x - robot_map_x) * map_resolution;
-                double dist_y = (y - robot_map_y) * map_resolution;
-                if (std::sqrt(dist_x * dist_x + dist_y * dist_y) > radius)
-                {
-                    continue;
-                }
-
-                // Calculate angle of the cell relative to the robot's current orientation
-                double angle = std::atan2(dist_y, dist_x) - yaw_;
-                
-                // Normalize angle to [0, 2*PI)
-                while (angle < 0) angle += 2 * M_PI;
-                while (angle >= 2 * M_PI) angle -= 2 * M_PI;
-
-                // Determine which slice the cell belongs to
-                int slice_index = static_cast<int>(angle / (2 * M_PI / num_slices));
-
-                // Get occupancy value and add to the slice's score
-                int map_index = y * map->info.width + x;
-                slice_scores[slice_index] += map->data[map_index];
-                slice_counts[slice_index]++;
-            }
-        }
-
-        double min_score = std::numeric_limits<double>::max();
-        int least_explored_slice = -1;
-
-        RCLCPP_INFO(this->get_logger(), "--- Exploration Slices ---");
-        for (int i = 0; i < num_slices; ++i)
-        {
-            double avg_score = (slice_counts[i] > 0) ? slice_scores[i] / slice_counts[i] : 100.0;
-            double slice_angle_deg = (i * 360.0/num_slices) + (360.0/num_slices / 2.0);
-            RCLCPP_INFO(this->get_logger(), "Slice %d (%.1f deg): Avg. Confidence = %.2f", i, slice_angle_deg, avg_score);
-
-            if (avg_score < min_score)
-            {
-                min_score = avg_score;
-                least_explored_slice = i;
-            }
-        }
-
-        if (least_explored_slice != -1)
-        {
-            double best_direction_deg = (least_explored_slice * 360.0/num_slices) + (360.0/num_slices / 2.0);
-            RCLCPP_INFO(this->get_logger(), "Least explored direction is slice %d (yaw-relative: %.1f deg)", least_explored_slice, best_direction_deg);
-        }
-        RCLCPP_INFO(this->get_logger(), "--------------------------");
-
-        // Is this approach a good idea?
-        // Yes, this is a solid foundational concept for a frontier-based exploration strategy.
-        // By identifying the direction with the most unknown cells (lowest average confidence),
-        // we can direct the robot to explore new areas, which is the core idea of mapping.
-        //
-        // Potential improvements:
-        // 1. Frontier Clustering: Instead of just a direction, we could identify and cluster contiguous
-        //    frontier cells to find the largest, most promising area to explore.
-        // 2. Cost-Benefit Analysis: We could weigh the "reward" of exploring a frontier (its size)
-        //    against the "cost" of reaching it (the distance).
-        // 3. Integration with Navigation: The chosen direction needs to be translated into a goal
-        //    for a navigation system (like Nav2) to drive the robot there safely.
-        //
-        // For this contest, this "pizza slice" method is a clever and efficient way to make
-        // an initial exploration decision without the complexity of a full frontier-based planner.
- */    }
     void controlLoop()
     {
          // Calculate elapsed time
@@ -428,9 +356,32 @@ private:
         }
         else
         {
-            // No obstacle - move forward
-            angular_ = 0.0;
+            // No obstacle - move forward with wall following if wall detected
             linear_ = 0.2;
+            
+            // Check if we have a wall on the right side
+            if (right_wall_distance_ < wall_detect_threshold_)
+            {
+                // Wall detected! Apply wall-following steering correction
+                float distance_error = right_wall_distance_ - desired_wall_distance_;
+                
+                // Proportional control: if too close to wall (error < 0), turn left (positive angular)
+                // if too far from wall (error > 0), turn right (negative angular)
+                angular_ = -wall_following_gain_ * distance_error;
+                
+                // Clamp angular velocity to reasonable limits
+                float max_angular = 0.5;  // rad/s
+                if (angular_ > max_angular) angular_ = max_angular;
+                if (angular_ < -max_angular) angular_ = -max_angular;
+                
+                // RCLCPP_INFO(this->get_logger(), "Wall following: distance=%.2f m, error=%.2f, angular=%.2f",
+                //            right_wall_distance_, distance_error, angular_);
+            }
+            else
+            {
+                // No wall detected - go straight (existing behavior)
+                angular_ = 0.0;
+            }
         }
 
         // Set velocity command
@@ -447,7 +398,6 @@ private:
     rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr laser_sub_;
     rclcpp::Subscription<irobot_create_msgs::msg::HazardDetectionVector>::SharedPtr hazard_sub_;
     rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
-    rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr map_sub_;
     rclcpp::TimerBase::SharedPtr timer_;
 
     rclcpp::Time start_time_;
@@ -464,6 +414,12 @@ private:
     std::vector<float> laserRange_;
     float laserDist90Left_;
     float laserDist90Right_;
+    
+    // Wall-following variables
+    float desired_wall_distance_;    // Target distance to maintain from right wall
+    float wall_following_gain_;      // Proportional gain for steering correction
+    float wall_detect_threshold_;    // Maximum distance to consider a wall present
+    float right_wall_distance_;      // Current average distance to right wall
     
     // State variables for turning behavior
     bool is_turning_;
