@@ -58,7 +58,6 @@ public:
         desiredAngle_ = 5;
         laserDist90Left_ = std::numeric_limits<float>::infinity();
         laserDist90Right_ = std::numeric_limits<float>::infinity();
-        // temp = 0;
         
         // Wall-following parameters
         desired_wall_distance_ = 0.6;  // Target distance from right wall (meters)
@@ -267,12 +266,12 @@ private:
                 else if (last_bumper_hit_ == "front_left")
                 {
                     turn_direction_ = -1;  // Turn right (away from left obstacle)
-                    turn_angle_deg = 30.0 + (rand() % 91);  // Random angle between 30-120 degrees
+                    turn_angle_deg = 30.0 + (rand() % 61);  // Random angle between 30-90 degrees
                 }
                 else if (last_bumper_hit_ == "front_right")
                 {
                     turn_direction_ = 1;   // Turn left (away from right obstacle)
-                    turn_angle_deg = 30.0 + (rand() % 91);  // Random angle between 30-120 degrees
+                    turn_angle_deg = 30.0 + (rand() % 61);  // Random angle between 30-90 degrees
                 }
                 else if (last_bumper_hit_ == "center")
                 {
@@ -281,12 +280,12 @@ private:
                         turn_direction_ = -1;  // Turn right
                     else
                         turn_direction_ = 1;   // Turn left
-                    turn_angle_deg = 30.0 + (rand() % 91);  // Random angle between 30-120 degrees
+                    turn_angle_deg = 30.0 + (rand() % 61);  // Random angle between 30-90 degrees
                 }
                 else
                 {
                     turn_direction_ = (rand() % 2 == 0) ? 1 : -1;  // Fallback to random
-                    turn_angle_deg = 30.0 + (rand() % 91);  // Random angle between 30-120 degrees
+                    turn_angle_deg = 30.0 + (rand() % 61);  // Random angle between 30-90 degrees
                 }
                 
                 target_yaw_ = yaw_ + turn_direction_ * deg2rad(turn_angle_deg);
@@ -341,7 +340,7 @@ private:
             else
                 turn_direction_ = 1;   // Turn left
             
-            target_yaw_ = yaw_ + turn_direction_ * deg2rad(30.0 + (rand() % 91));  // Random angle between 30-120 degrees
+            target_yaw_ = yaw_ + turn_direction_ * deg2rad(30.0 + (rand() % 61));  // Random angle between 30-90 degrees
 
             // Normalize target yaw to [-pi, pi]
             while (target_yaw_ > M_PI) target_yaw_ -= 2 * M_PI;
@@ -374,8 +373,8 @@ private:
                 if (angular_ > max_angular) angular_ = max_angular;
                 if (angular_ < -max_angular) angular_ = -max_angular;
                 
-                // RCLCPP_INFO(this->get_logger(), "Wall following: distance=%.2f m, error=%.2f, angular=%.2f",
-                //            right_wall_distance_, distance_error, angular_);
+                RCLCPP_INFO(this->get_logger(), "Wall following: distance=%.2f m, error=%.2f, angular=%.2f",
+                           right_wall_distance_, distance_error, angular_);
             }
             else
             {
