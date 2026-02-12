@@ -280,12 +280,12 @@ private:
                         turn_direction_ = -1;  // Turn right
                     else
                         turn_direction_ = 1;   // Turn left
-                    turn_angle_deg = 30.0 + (rand() % 61);  // Random angle between 30-90 degrees
+                    turn_angle_deg = 30.0 + (rand() % 91);  // Random angle between 30-120 degrees
                 }
                 else
                 {
                     turn_direction_ = (rand() % 2 == 0) ? 1 : -1;  // Fallback to random
-                    turn_angle_deg = 30.0 + (rand() % 61);  // Random angle between 30-90 degrees
+                    turn_angle_deg = 30.0 + (rand() % 91);  // Random angle between 30-120 degrees
                 }
                 
                 target_yaw_ = yaw_ + turn_direction_ * deg2rad(turn_angle_deg);
@@ -340,7 +340,9 @@ private:
             else
                 turn_direction_ = 1;   // Turn left
             
-            target_yaw_ = yaw_ + turn_direction_ * deg2rad(30.0 + (rand() % 61));  // Random angle between 30-90 degrees
+            // If wall detected, turn 30-90 degrees; otherwise turn 30-120 degrees
+            int turn_angle_range = (right_wall_distance_ < wall_detect_threshold_) ? 61 : 91;
+            target_yaw_ = yaw_ + turn_direction_ * deg2rad(30.0 + (rand() % turn_angle_range));
 
             // Normalize target yaw to [-pi, pi]
             while (target_yaw_ > M_PI) target_yaw_ -= 2 * M_PI;
