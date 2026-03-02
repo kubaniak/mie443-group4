@@ -90,8 +90,11 @@ class YoloDetectorNode(Node):
             if request.save_detected_image:
                 annotated_img = results[0].plot()
                 save_path = "detected_manipulable_object.jpg"
-                cv2.imwrite(save_path, annotated_img)
-                self.get_logger().info(f"Saved annotated image to {save_path}")
+                saved = cv2.imwrite(save_path, annotated_img)
+                if saved:
+                    self.get_logger().info(f"Saved annotated image to {save_path}")
+                else:
+                    self.get_logger().error(f"Failed to save annotated image to {save_path}")
 
         else:
             # No valid object found
