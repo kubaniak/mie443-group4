@@ -223,6 +223,12 @@ int main(int argc, char** argv) {
                 current_box_idx++;
             } else {
                 all_boxes_visited = true;
+                RCLCPP_WARN(node->get_logger(),
+                            "All boxes have been visited without successfully placing the object. Returning home.");
+                if (outfile.is_open()) {
+                    outfile << "WARNING: All boxes visited; manipulable object was not placed. Returning home."
+                            << std::endl;
+                }
                 return_home = true;
             }
         }
