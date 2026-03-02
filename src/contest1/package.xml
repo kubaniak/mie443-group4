@@ -5,8 +5,8 @@
   <version>1.0.0</version>
   <description>MIE443 Contest 1, Autonomous Exploration</description>
 
-  <maintainer email="user@todo.todo">Your Name</maintainer>
-  <license>Apache 2.0</license>
+  <maintainer email="65218910+kubaniak@users.noreply.github.com">Martin Zahariev</maintainer>
+  <license>Apache-2.0</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 
