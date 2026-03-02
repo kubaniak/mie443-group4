@@ -58,6 +58,7 @@ class YoloDetectorNode(Node):
         best_conf = 0.0
         best_class_id = -1
         best_class_name = ""
+        best_box = None
 
         # Dictionary mapping COCO class IDs to names
         names = self.model.names
@@ -75,6 +76,7 @@ class YoloDetectorNode(Node):
                         best_conf = conf
                         best_class_id = cls_id
                         best_class_name = class_name
+                        best_box = box
 
         if best_class_id != -1:
             # We found a valid object
@@ -87,14 +89,24 @@ class YoloDetectorNode(Node):
             self.get_logger().info(response.message)
 
             # Save annotated image if requested
-            if request.save_detected_image:
-                annotated_img = results[0].plot()
+            if request.save_detected_image and best_box is not None:
+                # Create a copy of the original image to annotate
+                annotated_img = image.copy()
+
+                # Extract bounding box coordinates (xyxy format)
+                x1, y1, x2, y2 = map(int, best_box.xyxy[0].tolist())
+
+                # Draw the bounding box
+                cv2.rectangle(annotated_img, (x1, y1), (x2, y2), (0, 255, 0), 2)
+
+                # Add label text (Class Name + Confidence)
+                label = f"{best_class_name} {best_conf:.2f}"
+                cv2.putText(annotated_img, label, (x1, y1 - 10),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+
                 save_path = "detected_manipulable_object.jpg"
-                saved = cv2.imwrite(save_path, annotated_img)
-                if saved:
-                    self.get_logger().info(f"Saved annotated image to {save_path}")
-                else:
-                    self.get_logger().error(f"Failed to save annotated image to {save_path}")
+                cv2.imwrite(save_path, annotated_img)
+                self.get_logger().info(f"Saved annotated image to {save_path}")
 
         else:
             # No valid object found
