@@ -34,7 +34,6 @@ from mie443_contest2.srv import CaptureImage
 
 import time
 import threading
-import math
 import cv2
 import numpy as np
 
