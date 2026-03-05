@@ -53,8 +53,47 @@ class YoloDetectorNode(Node):
         boxes = results[0].boxes
 
         ### YOUR CODE HERE ###
-  
+        # Run YOLO reference
+        results = self.model(image, verbose=False, device='cpu')
+        boxes = results[0].boxes
 
+        if boxes is None or len(boxes) == 0:
+            response.success = False
+            response.class_id = -1
+            response.class_name = ""
+            response.confidence = 0.0
+            response.message = "No objects detected"
+            return response
+        
+        # Filter by confidence threshold
+        mask = boxes.conf >= self.confidence_threshold
+        if not mask.any():
+            response.success = False
+            response.class_id = -1
+            response.class_name = ""
+            response.confidence = 0.0
+            response.message = f"No detections above confidence {self.confidence_threshold} threshold"
+            return response
+
+        # Get highest confidence detection
+        best_idx = boxes.conf.argmax()
+        class_id = int(boxes.cls[best_idx])
+        confidence = float(boxes.conf[best_idx])
+        class_name = self.model.names[class_id]
+
+        response.success = True
+        response.class_id = class_id
+        response.class_name = class_name
+        response.confidence = confidence
+        response.message = "Detection successful {class_name} with confidence {confidence:.2f}".format(class_name=class_name, confidence=confidence)
+        
+        if save_detected_image:
+            filename = f"/home/turtlebot/ros2_ws/src/contest2/yolo_detections/detection_{class_name}_{confidence:.2f}.jpg"
+            annotated_image = results[0].plot()
+            cv2.imwrite(filename, annotated_image)
+            self.get_logger().info(f"Saved detected image to {filename}")
+        
+        self.get_logger().info(f"Detection: {class_name} (ID: {class_id}) with confidence {confidence:.2f}")
         return response
 
 

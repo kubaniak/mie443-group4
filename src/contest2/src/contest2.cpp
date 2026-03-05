@@ -62,7 +62,35 @@ int main(int argc, char** argv) {
                     i, boxes.coords[i][0], boxes.coords[i][1], boxes.coords[i][2]);
     }
     
+    // Initialize YOLO object detector
+    YoloInterface yoloDetector(node);
 
+    // ArmController armController(node);
+
+    // RCLCPP_INFO(node->get_logger(), "TESTING ARM CONTROL");
+
+    // bool success = armController.moveToCartesianPose(0.043, 0.199, 0.313,
+    //                                                 -0.471, -0.557, 0.564, -0.387);
+    // if (success) {
+    //     RCLCPP_INFO(node->get_logger(), "Successfully moved to Cartesian pose");
+    //     // Test gripper
+    //     RCLCPP_INFO(node->get_logger(), "Testing gripper control");
+    //     armController.openGripper();
+    //     std::this_thread::sleep_for(std::chrono::seconds(2));
+    //     armController.closeGripper();
+    //     std::this_thread::sleep_for(std::chrono::seconds(2));
+    // } else {
+    //     RCLCPP_ERROR(node->get_logger(), "Failed to move to Cartesian pose");
+    // }
+
+    // success = armController.moveToCartesianPose(0.142, -0.064, 0.400, 
+    //                                             -0.418, 0.844, 0.238, -0.237);
+    // if (success) {
+    //     RCLCPP_INFO(node->get_logger(), "Successfully moved to Cartesian pose");
+    // } else {
+    //     RCLCPP_ERROR(node->get_logger(), "Failed to move to Cartesian pose");
+    // }
+    
     // Contest countdown timer
     auto start = std::chrono::system_clock::now();
     uint64_t secondsElapsed = 0;
@@ -76,9 +104,25 @@ int main(int argc, char** argv) {
         // Calculate elapsed time
         auto now = std::chrono::system_clock::now();
         secondsElapsed = std::chrono::duration_cast<std::chrono::seconds>(now - start).count();
+        
+        // TEST CODE FOR YOLO DETECTION
+        static uint64_t lastYoloTime = 0;
+        if (secondsElapsed >= lastYoloTime + 2) { 
+            lastYoloTime = secondsElapsed; // Update last YOLO time to current time
+            RCLCPP_INFO(node->get_logger(), "Attempting YOLO (WRIST Camera) detection at %lu seconds", secondsElapsed);
+            std::string detected = yoloDetector.getObjectName(CameraSource::WRIST, true);
+
+            if (!detected.empty()) {
+                float confidence = yoloDetector.getConfidence();
+                RCLCPP_INFO(node->get_logger(), "YOLO detected: %s with confidence %.2f", detected.c_str(), confidence);
+            } else {
+                RCLCPP_INFO(node->get_logger(), "YOLO did not detect any objects");
+            }
+        }
+
 
         /***YOUR CODE HERE***/
-
+        
 
 
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
