@@ -6,6 +6,7 @@
 #include "mie443_contest2/apriltag_detector.h"
 #include <rclcpp/rclcpp.hpp>
 #include <ament_index_cpp/get_package_share_directory.hpp>
+#include <geometry_msgs/msg/twist_stamped.hpp>
 #include <chrono>
 #include <thread>
 #include <fstream>
@@ -65,10 +66,10 @@ int main(int argc, char** argv) {
     // Initialize YOLO object detector
     YoloInterface yoloDetector(node);
 
-    // ArmController armController(node);
+    ArmController armController(node);
 
+    // TEST CODE FOR ARM CONTROL
     // RCLCPP_INFO(node->get_logger(), "TESTING ARM CONTROL");
-
     // bool success = armController.moveToCartesianPose(0.043, 0.199, 0.313,
     //                                                 -0.471, -0.557, 0.564, -0.387);
     // if (success) {
@@ -91,38 +92,99 @@ int main(int argc, char** argv) {
     //     RCLCPP_ERROR(node->get_logger(), "Failed to move to Cartesian pose");
     // }
     
+    // if (success) {
+    //     RCLCPP_INFO(node->get_logger(), "Successfully moved to Cartesian pose");
+    //     // Test gripper
+    //     RCLCPP_INFO(node->get_logger(), "Testing gripper control");
+    //     armController.openGripper();
+    //     std::this_thread::sleep_for(std::chrono::seconds(2));
+    //     armController.closeGripper();
+    //     std::this_thread::sleep_for(std::chrono::seconds(2));
+    // } else {
+    //     RCLCPP_ERROR(node->get_logger(), "Failed to move to Cartesian pose");
+    // }
+
+    // success = armController.moveToCartesianPose(0.142, -0.064, 0.400, 
+    //                                             -0.418, 0.844, 0.238, -0.237);
+    // if (success) {
+    //     RCLCPP_INFO(node->get_logger(), "Successfully moved to Cartesian pose");
+    // } else {
+    //     RCLCPP_ERROR(node->get_logger(), "Failed to move to Cartesian pose");
+    // }
+
+
     // Contest countdown timer
     auto start = std::chrono::system_clock::now();
     uint64_t secondsElapsed = 0;
 
     RCLCPP_INFO(node->get_logger(), "Starting contest - 300 seconds timer begins now!");
 
-    // Execute strategy
+    RCLCPP_INFO(node->get_logger(), "Moving Arm for selfie...");
+
+    // From Simulation: 
+    // Translation: [0.159, 0.025, 0.172]
+    // Rotation: in Quaternion (xyzw) [0.109, 0.153, 0.801, 0.568]
+    
+    bool success = armController.moveToCartesianPose(0.159, 0.025, 0.172, 
+                                                     0.109, 0.153, 0.801, 0.568);
+    if (success) {
+        RCLCPP_INFO(node->get_logger(), "Successfully moved to Cartesian pose for selfie");
+        // Take one picture of 
+        RCLCPP_INFO(node->get_logger(), "Attempting YOLO (WRIST Camera) detection at %lu seconds", secondsElapsed);
+        std::string detected = yoloDetector.getObjectName(CameraSource::WRIST, true);
+
+        if (!detected.empty()) {
+            float confidence = yoloDetector.getConfidence();
+            RCLCPP_INFO(node->get_logger(), "YOLO detected: %s with confidence %.2f", detected.c_str(), confidence);
+        } else {
+            RCLCPP_INFO(node->get_logger(), "YOLO did not detect any objects");
+        }
+    } else {
+        RCLCPP_ERROR(node->get_logger(), "Failed to move to Cartesian pose for selfie");
+    }
+
     while(rclcpp::ok() && secondsElapsed <= 300) {
         rclcpp::spin_some(node);
 
         // Calculate elapsed time
         auto now = std::chrono::system_clock::now();
-        secondsElapsed = std::chrono::duration_cast<std::chrono::seconds>(now - start).count();
+        secondsElapsed = std::chrono::duration_cast<std::chrono::seconds>(now - start).count();                
         
-        // TEST CODE FOR YOLO DETECTION
-        static uint64_t lastYoloTime = 0;
-        if (secondsElapsed >= lastYoloTime + 2) { 
-            lastYoloTime = secondsElapsed; // Update last YOLO time to current time
-            RCLCPP_INFO(node->get_logger(), "Attempting YOLO (WRIST Camera) detection at %lu seconds", secondsElapsed);
-            std::string detected = yoloDetector.getObjectName(CameraSource::WRIST, true);
+        // // TEST CODE FOR YOLO DETECTION
+        // static uint64_t lastYoloTime = 0;
+        // if (secondsElapsed >= lastYoloTime + 2) { 
+        //     lastYoloTime = secondsElapsed; // Update last YOLO time to current time
+        //     RCLCPP_INFO(node->get_logger(), "Attempting YOLO (WRIST Camera) detection at %lu seconds", secondsElapsed);
+        //     std::string detected = yoloDetector.getObjectName(CameraSource::WRIST, true);
 
-            if (!detected.empty()) {
-                float confidence = yoloDetector.getConfidence();
-                RCLCPP_INFO(node->get_logger(), "YOLO detected: %s with confidence %.2f", detected.c_str(), confidence);
-            } else {
-                RCLCPP_INFO(node->get_logger(), "YOLO did not detect any objects");
-            }
+        //     if (!detected.empty()) {
+        //         float confidence = yoloDetector.getConfidence();
+        //         RCLCPP_INFO(node->get_logger(), "YOLO detected: %s with confidence %.2f", detected.c_str(), confidence);
+        //     } else {
+        //         RCLCPP_INFO(node->get_logger(), "YOLO did not detect any objects");
+        //     }
+        // }
+
+        /***YOUR CODE HERE***/
+        // Localization: spin the robot for localization at the start of the contest TODO: Change seconds
+        if (secondsElapsed < 4) {
+            // Spin in place for localization
+            geometry_msgs::msg::TwistStamped vel;
+            vel.header.stamp = node->now();
+            vel.twist.linear.x = 0.0;
+            vel.twist.angular.z = 0.5;  // Spin at 0.5 rad/s
+            vel_pub->publish(vel);
+            continue;  // Skip the rest of the loop while localizing
+        } else if (secondsElapsed >= 4 && secondsElapsed < 6) {
+            // Stop the robot after spinning
+            geometry_msgs::msg::TwistStamped vel;
+            vel.header.stamp = node->now();
+            vel.twist.linear.x = 0.0;
+            vel.twist.angular.z = 0.0;  // Stop spinning
+            vel_pub->publish(vel);
         }
 
 
-        /***YOUR CODE HERE***/
-        
 
 
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
