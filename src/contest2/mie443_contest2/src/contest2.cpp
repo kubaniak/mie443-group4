@@ -147,7 +147,7 @@ int main(int argc, char** argv) {
             double pickup_qx = 0.0;
             double pickup_qy = 0.0;
             double pickup_qz = 0.0;
-            double pickup_qw = 0.0;
+            double pickup_qw = 1.0;  // Identity quaternion (0, 0, 0, 1) as a valid default orientation
 
             RCLCPP_INFO(node->get_logger(), "Moving arm to pickup position");
             arm.openGripper();
@@ -157,7 +157,7 @@ int main(int argc, char** argv) {
 
                 // TODO: Update values for carry_pose (x, y, z, qx, qy, qz, qw)
                 // Move arm to a safe carry position
-                arm.moveToCartesianPose(0.1, 0.0, 0.3, 0.0, 0.0, 0.0, 0.0);
+                arm.moveToCartesianPose(0.1, 0.0, 0.3, 0.0, 0.0, 0.0, 1.0);  // Identity quaternion for safe carry pose
             } else {
                 RCLCPP_ERROR(node->get_logger(), "Failed to move arm to pickup position!");
             }
