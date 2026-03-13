@@ -227,10 +227,11 @@ int main(int argc, char** argv) {
                                 double drop_x = 0.4;
                                 double drop_y = 0.0;
                                 double drop_z = 0.2;
+                                // Use a valid, normalized quaternion (identity orientation)
                                 double drop_qx = 0.0;
                                 double drop_qy = 0.0;
                                 double drop_qz = 0.0;
-                                double drop_qw = 0.0;
+                                double drop_qw = 1.0;
 
                                 if (arm.moveToCartesianPose(drop_x, drop_y, drop_z, drop_qx, drop_qy, drop_qz, drop_qw)) {
                                     arm.openGripper();
@@ -238,7 +239,7 @@ int main(int argc, char** argv) {
 
                                     // TODO: Update values for carry_pose (x, y, z, qx, qy, qz, qw)
                                     // Move arm back to carry/rest position
-                                    arm.moveToCartesianPose(0.1, 0.0, 0.3, 0.0, 0.0, 0.0, 0.0);
+                                    arm.moveToCartesianPose(0.1, 0.0, 0.3, 0.0, 0.0, 0.0, 1.0);
 
                                     object_placed = true;
                                 } else {
