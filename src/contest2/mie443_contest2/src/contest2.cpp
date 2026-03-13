@@ -76,11 +76,6 @@ int main(int argc, char** argv) {
         RCLCPP_WARN(node->get_logger(), "Could not open contest2_output.txt for writing");
     }
 
-    // Spin for a moment to receive initial AMCL pose
-    for (int i = 0; i < 10; ++i) {
-        rclcpp::spin_some(node);
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    }
     double start_x = robotPose.x;
     double start_y = robotPose.y;
     double start_phi = robotPose.phi;
@@ -107,57 +102,48 @@ int main(int argc, char** argv) {
         // Calculate elapsed time
         auto now = std::chrono::system_clock::now();
         secondsElapsed = std::chrono::duration_cast<std::chrono::seconds>(now - start).count();
+        
+        // // TEST CODE FOR YOLO DETECTION
+        // static uint64_t lastYoloTime = 0;
+        // if (secondsElapsed >= lastYoloTime + 2) { 
+        //     lastYoloTime = secondsElapsed; // Update last YOLO time to current time
+        //     RCLCPP_INFO(node->get_logger(), "Attempting YOLO (WRIST Camera) detection at %lu seconds", secondsElapsed);
+        //     std::string detected = yolo.getObjectName(CameraSource::WRIST, true);
+
+        //     if (!detected.empty()) {
+        //         float confidence = yolo.getConfidence();
+        //         RCLCPP_INFO(node->get_logger(), "YOLO detected: %s with confidence %.2f", detected.c_str(), confidence);
+        //     } else {
+        //         RCLCPP_INFO(node->get_logger(), "YOLO did not detect any objects");
+        //     }
+        // }
 
         /***YOUR CODE HERE***/
         if (!pickup_done) {
             // 1. Detection and Pickup
+            
+            // STILL WORKING ON ARM POSES
+            arm.moveToCartesianPose(0.141, -0.005, 0.181, 0.014, 0.100, 0.285, 0.953);
 
-            RCLCPP_INFO(node->get_logger(), "Moving Arm for selfie...");
-            // TODO: This pose is from the simulation, needs to be tested on real hardware
-            // Translation: [0.159, 0.025, 0.172]
-            // Rotation: in Quaternion (xyzw) [0.109, 0.153, 0.801, 0.568]
-            bool selfie_success = arm.moveToCartesianPose(0.159, 0.025, 0.172,
-                                                          0.109, 0.153, 0.801, 0.568);
-
-            if (selfie_success) {
-                RCLCPP_INFO(node->get_logger(), "Successfully moved to Cartesian pose for selfie");
+            RCLCPP_INFO(node->get_logger(), "Moving arm to pickup position");
+            arm.openGripper();
+            if (arm.moveToCartesianPose(0.151, -0.013, 0.155, -0.005, 0.139, 0.037, 0.990)) {
+                arm.closeGripper();
+                RCLCPP_INFO(node->get_logger(), "Object picked up successfully.");
                 RCLCPP_INFO(node->get_logger(), "Attempting to detect manipulable object with WRIST camera");
                 // Save the image once we take the selfie
                 manipulable_object = yolo.getObjectName(CameraSource::WRIST, true);
 
                 if (manipulable_object.empty()) {
-                    RCLCPP_WARN(node->get_logger(), "Failed to detect manipulable object. Retrying...");
+                    RCLCPP_WARN(node->get_logger(), "Failed to detect manipulable object. NOT Retrying...");
                     std::this_thread::sleep_for(std::chrono::seconds(1));
-                    continue;
                 }
 
                 float confidence = yolo.getConfidence();
                 RCLCPP_INFO(node->get_logger(), "Detected manipulable object: %s (confidence: %.2f)", manipulable_object.c_str(), confidence);
-            } else {
-                RCLCPP_ERROR(node->get_logger(), "Failed to move to Cartesian pose for selfie! Retrying...");
-                std::this_thread::sleep_for(std::chrono::seconds(1));
-                continue;
-            }
 
-
-            // TODO: Update values for pickup_pose (x, y, z, qx, qy, qz, qw)
-            double pickup_x = 0.3;
-            double pickup_y = 0.0;
-            double pickup_z = 0.1;
-            double pickup_qx = 0.0;
-            double pickup_qy = 0.0;
-            double pickup_qz = 0.0;
-            double pickup_qw = 1.0;  // Identity quaternion (0, 0, 0, 1) as a valid default orientation
-
-            RCLCPP_INFO(node->get_logger(), "Moving arm to pickup position");
-            arm.openGripper();
-            if (arm.moveToCartesianPose(pickup_x, pickup_y, pickup_z, pickup_qx, pickup_qy, pickup_qz, pickup_qw)) {
-                arm.closeGripper();
-                RCLCPP_INFO(node->get_logger(), "Object picked up successfully.");
-
-                // TODO: Update values for carry_pose (x, y, z, qx, qy, qz, qw)
-                // Move arm to a safe carry position
-                arm.moveToCartesianPose(0.1, 0.0, 0.3, 0.0, 0.0, 0.0, 1.0);  // Identity quaternion for safe carry pose
+                // Move arm to a safe carry position (done)
+                arm.moveToCartesianPose(0.019, -0.278, 0.243, -0.468, -0.462, -0.533, 0.533);  // home/carry position
             } else {
                 RCLCPP_ERROR(node->get_logger(), "Failed to move arm to pickup position!");
             }
@@ -216,14 +202,14 @@ int main(int argc, char** argv) {
                             RCLCPP_INFO(node->get_logger(), "MATCH FOUND! Manipulable object matches scene object.");
 
                             // Look for AprilTags for the bin
-                            // TODO: Pass actual candidate IDs once known
-                            std::vector<int> candidate_tags = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10};
+                            std::vector<int> candidate_tags = {0, 1, 2, 3, 4};
                             std::vector<int> visible_tags = apriltag.getVisibleTags(candidate_tags, 100);
 
+                            // TODO: Still not doing anything with april tags. Could use tf to determine exact bin location and update drop pose accordingly, but for now just check if any tag is visible at all as a proxy for "is the bin in front of us"
                             if (!visible_tags.empty()) {
                                 RCLCPP_INFO(node->get_logger(), "Found bin with AprilTag ID: %d. Placing object.", visible_tags[0]);
 
-                                // TODO: Update values for drop_pose (x, y, z, qx, qy, qz, qw)
+                                // TODO: Update values for drop_pose (x, y, z, qx, qy, qz, qw) (could just be home/carry position)
                                 double drop_x = 0.4;
                                 double drop_y = 0.0;
                                 double drop_z = 0.2;
@@ -237,9 +223,8 @@ int main(int argc, char** argv) {
                                     arm.openGripper();
                                     RCLCPP_INFO(node->get_logger(), "Object placed successfully in the bin!");
 
-                                    // TODO: Update values for carry_pose (x, y, z, qx, qy, qz, qw)
                                     // Move arm back to carry/rest position
-                                    arm.moveToCartesianPose(0.1, 0.0, 0.3, 0.0, 0.0, 0.0, 1.0);
+                                    arm.moveToCartesianPose(0.019, -0.278, 0.243, -0.468, -0.462, -0.533, 0.533);  // home/carry position
 
                                     object_placed = true;
                                 } else {

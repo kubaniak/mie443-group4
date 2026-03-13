@@ -21,11 +21,20 @@ class YoloDetectorNode(Node):
         self.get_logger().info('YOLO model loaded')
         
         # Confidence threshold
-        self.confidence_threshold = 0.5
-        
-        # Target classes for the contest
-        self.target_classes = ["cup", "bottle", "clock", "potted plant", "motorcycle"]
+        self.confidence_threshold = 0.1
 
+        # Only these classes are allowed to be returned by the service.
+        # Keys are normalized YOLO class names, values are response names.
+        self.allowed_classes = {
+            'cup': 'cup',
+            'motorcycle': 'motorcycle',
+            'clock': 'clock',
+            'potted plant': 'plant',
+            'plant': 'plant',
+            'bottle': 'water bottle',
+            'water bottle': 'water bottle',
+        }
+        
         # Create service
         self.service = self.create_service(
             DetectObject,
@@ -40,6 +49,7 @@ class YoloDetectorNode(Node):
         
         # Decode compressed image
         np_arr = np.frombuffer(request.image.data, np.uint8)
+        save_detected_image = request.save_detected_image
         image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
         
         if image is None:
@@ -54,70 +64,71 @@ class YoloDetectorNode(Node):
         results = self.model(image, verbose=False, device='cpu')
         boxes = results[0].boxes
 
-        ### YOUR CODE HERE ###
-        best_conf = 0.0
-        best_class_id = -1
-        best_class_name = ""
-        best_box = None
-
-        # Dictionary mapping COCO class IDs to names
-        names = self.model.names
-
-        for box in boxes:
-            cls_id = int(box.cls[0].item())
-            conf = float(box.conf[0].item())
-
-            if cls_id in names:
-                class_name = names[cls_id]
-
-                # Check if it's a target class and meets confidence threshold
-                if class_name in self.target_classes and conf >= self.confidence_threshold:
-                    if conf > best_conf:
-                        best_conf = conf
-                        best_class_id = cls_id
-                        best_class_name = class_name
-                        best_box = box
-
-        if best_class_id != -1:
-            # We found a valid object
-            response.success = True
-            response.class_id = best_class_id
-            response.class_name = best_class_name
-            response.confidence = best_conf
-            response.message = f"Detected {best_class_name} with confidence {best_conf:.2f}"
-
-            self.get_logger().info(response.message)
-
-            # Save annotated image if requested
-            if request.save_detected_image and best_box is not None:
-                # Create a copy of the original image to annotate
-                annotated_img = image.copy()
-
-                # Extract bounding box coordinates (xyxy format)
-                x1, y1, x2, y2 = map(int, best_box.xyxy[0].tolist())
-
-                # Draw the bounding box
-                cv2.rectangle(annotated_img, (x1, y1), (x2, y2), (0, 255, 0), 2)
-
-                # Add label text (Class Name + Confidence)
-                label = f"{best_class_name} {best_conf:.2f}"
-                cv2.putText(annotated_img, label, (x1, y1 - 10),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
-
-                save_path = "detected_manipulable_object.jpg"
-                cv2.imwrite(save_path, annotated_img)
-                self.get_logger().info(f"Saved annotated image to {save_path}")
-
-        else:
-            # No valid object found
+        if boxes is None or len(boxes) == 0:
             response.success = False
             response.class_id = -1
             response.class_name = ""
             response.confidence = 0.0
-            response.message = "No target objects detected above confidence threshold"
+            response.message = "No objects detected"
+            return response
+        
+        # Filter by confidence threshold
+        mask = boxes.conf >= self.confidence_threshold
+        if not mask.any():
+            response.success = False
+            response.class_id = -1
+            response.class_name = ""
+            response.confidence = 0.0
+            response.message = f"No detections above confidence {self.confidence_threshold} threshold"
+            return response
 
-            self.get_logger().warn(response.message)
+        # Keep only allowed classes and select the highest-confidence one.
+        best_idx = -1
+        best_confidence = -1.0
+        class_id = -1
+        class_name = ""
 
+        for idx in range(len(boxes)):
+            confidence = float(boxes.conf[idx])
+            if confidence < self.confidence_threshold:
+                continue
+
+            detected_class_id = int(boxes.cls[idx])
+            detected_class_name = str(self.model.names[detected_class_id]).lower()
+            normalized_name = self.allowed_classes.get(detected_class_name)
+
+            if normalized_name is None:
+                continue
+
+            if confidence > best_confidence:
+                best_idx = idx
+                best_confidence = confidence
+                class_id = detected_class_id
+                class_name = normalized_name
+
+        if best_idx == -1:
+            response.success = False
+            response.class_id = -1
+            response.class_name = ""
+            response.confidence = 0.0
+            response.message = "No allowed objects detected"
+            return response
+
+        confidence = best_confidence
+
+        response.success = True
+        response.class_id = class_id
+        response.class_name = class_name
+        response.confidence = confidence
+        response.message = "Detection successful {class_name} with confidence {confidence:.2f}".format(class_name=class_name, confidence=confidence)
+        
+        if save_detected_image:
+            filename = f"/home/turtlebot/ros2_ws/src/contest2/mie443_contest2/yolo_detections/detection_{class_name}_{confidence:.2f}.jpg"
+            annotated_image = results[0].plot()
+            cv2.imwrite(filename, annotated_image)
+            self.get_logger().info(f"Saved detected image to {filename}")
+        
+        self.get_logger().info(f"Detection: {class_name} (ID: {class_id}) with confidence {confidence:.2f}")
         return response
 
 

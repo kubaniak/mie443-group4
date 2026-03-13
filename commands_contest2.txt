@@ -1,0 +1,59 @@
+Commands
+
+IP: 100.69.127.157
+
+Teleop
+
+Start Localization
+ros2 launch turtlebot4_gz_bringup turtlebot4_gz.launch.py model:=lite # run for sim
+ros2 launch turtlebot4_navigation localization.launch.py map:=/opt/ros/jazzy/share/turtlebot4_navigation/maps/warehouse.yaml # run always
+ros2 launch turtlebot4_viz view_navigation.launch.py
+
+Start Nav2 (only planning, no execution) 
+ros2 launch turtlebot4_navigation nav2.launch.py
+
+Arm Simulation
+ros2 launch lerobot_description so101_gazebo.launch.py
+ros2 launch lerobot_controller so101_controller.launch.py # needs to launch only once, will shutdown automatically 
+ros2 launch lerobot_moveit so101_moveit.launch.py
+echo end effector pose:
+ros2 run tf2_ros tf2_echo world gripper
+
+Real Arm Testing
+ssh into robot:
+source contest2/bin/activate
+ros2 launch lerobot_moveit so101_turtlebot.launch.py
+on laptop:
+ros2 launch lerobot_moveit so101_laptop.launch.py
+echo end effector pose:
+ros2 run tf2_ros tf2_echo arm_mount gripper
+then run contest2 with arm testing code.
+If not working, do some arm yoga
+
+Yolo detection
+
+In contest2.cpp: YoloInterface yoloDetector(node);
+
+OAKD:
+To test
+ssh into robot:
+ros2 run mie443_contest2 image_capture_server (ONLY FOR OAKD)
+on laptop:
+source /contest2/bin/activate
+(contest2) ros2 run mie443_contest2 yolo_detector.py
+in contest2.cpp: CameraSource::OAKD
+then run contest2 with camera testing code
+
+WRIST
+ssh into robot
+source contest2/bin/activate
+ros2 launch lerobot_moveit so101_turtlebot.launch.py
+in contest2.cpp: CameraSource::WRIST
+on laptop:
+(contest2) ros2 run mie443_contest2 yolo_detector.py
+then run contest2 with camera testing code
+
+To save, set to CameraSource to true. 
+
+AprilTag Detection Test
+works, have to include commands soon. 
