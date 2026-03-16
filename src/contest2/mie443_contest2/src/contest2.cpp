@@ -68,12 +68,66 @@ int main(int argc, char** argv) {
     // Initialize helper objects
     Navigation nav(node);
     YoloInterface yolo(node);
-    ArmController arm(node);
+    // ArmController arm(node);
     AprilTagDetector apriltag(node);
 
     std::ofstream outfile("contest2_output.txt");
     if (!outfile.is_open()) {
         RCLCPP_WARN(node->get_logger(), "Could not open contest2_output.txt for writing");
+    }
+
+    // Contest countdown timer
+    auto start = std::chrono::system_clock::now();
+    uint64_t secondsElapsed = 0;
+
+
+    // Spin 360 degrees in place so AMCL can converge before we record the start pose.
+    // The TurtleBot4 expects TwistStamped on /cmd_vel.
+    {
+        auto vel_pub = node->create_publisher<geometry_msgs::msg::TwistStamped>("/cmd_vel", 10);
+
+        // Spin parameters
+        const double angular_speed = 0.5;          // rad/s  (positive = counter-clockwise)
+        const double total_angle   = 2.0 * M_PI;   // one full rotation
+        const double spin_duration = total_angle / angular_speed;  // seconds
+
+        RCLCPP_INFO(node->get_logger(),
+                     "Spinning 360 degrees in place for AMCL convergence (%.1f s at %.2f rad/s)...",
+                     spin_duration, angular_speed);
+
+        auto spin_start = node->get_clock()->now();
+
+        while (rclcpp::ok()) {
+            rclcpp::spin_some(node);  // process AMCL callbacks while spinning
+
+            double elapsed = (node->get_clock()->now() - spin_start).seconds();
+            if (elapsed >= spin_duration) {
+                break;
+            }
+
+            geometry_msgs::msg::TwistStamped cmd;
+            cmd.header.stamp = node->now();
+            cmd.twist.linear.x = 0.0;
+            cmd.twist.angular.z = angular_speed;
+            vel_pub->publish(cmd);
+
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
+
+        // Stop the robot
+        geometry_msgs::msg::TwistStamped stop_cmd;
+        stop_cmd.header.stamp = node->now();
+        stop_cmd.twist.linear.x = 0.0;
+        stop_cmd.twist.angular.z = 0.0;
+        vel_pub->publish(stop_cmd);
+
+        // Let a few more AMCL updates arrive after stopping
+        for (int i = 0; i < 20; ++i) {
+            rclcpp::spin_some(node);
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
+
+        RCLCPP_INFO(node->get_logger(), "Spin complete. AMCL should now have a good pose estimate.");
     }
 
     double start_x = robotPose.x;
@@ -88,10 +142,6 @@ int main(int argc, char** argv) {
     bool return_home = false;
     std::string manipulable_object = "";
     bool all_boxes_visited = false;
-
-    // Contest countdown timer
-    auto start = std::chrono::system_clock::now();
-    uint64_t secondsElapsed = 0;
 
     RCLCPP_INFO(node->get_logger(), "Starting contest - 300 seconds timer begins now!");
 
@@ -119,38 +169,37 @@ int main(int argc, char** argv) {
         // }
 
         /***YOUR CODE HERE***/
-        if (!pickup_done) {
-            // 1. Detection and Pickup
+        // if (!pickup_done) {
+        //     // 1. Detection and Pickup
             
-            // STILL WORKING ON ARM POSES
-            arm.moveToCartesianPose(0.141, -0.005, 0.181, 0.014, 0.100, 0.285, 0.953);
+        //     // STILL WORKING ON ARM POSES
 
-            RCLCPP_INFO(node->get_logger(), "Moving arm to pickup position");
-            arm.openGripper();
-            if (arm.moveToCartesianPose(0.151, -0.013, 0.155, -0.005, 0.139, 0.037, 0.990)) {
-                arm.closeGripper();
-                RCLCPP_INFO(node->get_logger(), "Object picked up successfully.");
-                RCLCPP_INFO(node->get_logger(), "Attempting to detect manipulable object with WRIST camera");
-                // Save the image once we take the selfie
-                manipulable_object = yolo.getObjectName(CameraSource::WRIST, true);
+        //     RCLCPP_INFO(node->get_logger(), "Moving arm to pickup position");
+        //     arm.openGripper();
+        //     if (arm.moveToCartesianPose(0.151, -0.013, 0.155, -0.005, 0.139, 0.037, 0.990)) {
+        //         arm.closeGripper();
+        //         RCLCPP_INFO(node->get_logger(), "Object picked up successfully.");
+        //         RCLCPP_INFO(node->get_logger(), "Attempting to detect manipulable object with WRIST camera");
+        //         // Save the image once we take the selfie
+        //         manipulable_object = yolo.getObjectName(CameraSource::WRIST, true);
 
-                if (manipulable_object.empty()) {
-                    RCLCPP_WARN(node->get_logger(), "Failed to detect manipulable object. NOT Retrying...");
-                    std::this_thread::sleep_for(std::chrono::seconds(1));
-                }
+        //         if (manipulable_object.empty()) {
+        //             RCLCPP_WARN(node->get_logger(), "Failed to detect manipulable object. NOT Retrying...");
+        //             std::this_thread::sleep_for(std::chrono::seconds(1));
+        //         }
 
-                float confidence = yolo.getConfidence();
-                RCLCPP_INFO(node->get_logger(), "Detected manipulable object: %s (confidence: %.2f)", manipulable_object.c_str(), confidence);
+        //         float confidence = yolo.getConfidence();
+        //         RCLCPP_INFO(node->get_logger(), "Detected manipulable object: %s (confidence: %.2f)", manipulable_object.c_str(), confidence);
 
-                // Move arm to a safe carry position (done)
-                arm.moveToCartesianPose(0.019, -0.278, 0.243, -0.468, -0.462, -0.533, 0.533);  // home/carry position
-            } else {
-                RCLCPP_ERROR(node->get_logger(), "Failed to move arm to pickup position!");
-            }
+        //         // Move arm to a safe carry position (done)
+        //         arm.moveToCartesianPose(0.019, -0.278, 0.243, -0.468, -0.462, -0.533, 0.533);  // home/carry position
+        //     } else {
+        //         RCLCPP_ERROR(node->get_logger(), "Failed to move arm to pickup position!");
+        //     }
 
-            pickup_done = true;
-        }
-        else if (!all_boxes_visited && !return_home) {
+        //     pickup_done = true;
+        // }
+        if (!all_boxes_visited && !return_home) {
             // 2. Navigation, Identification, and Placement
             if (current_box_idx < boxes.coords.size()) {
                 double box_x = boxes.coords[current_box_idx][0];
@@ -181,10 +230,6 @@ int main(int argc, char** argv) {
                     // Detect scene object
                     // We call getObjectName with true to save the detected image
                     std::string scene_object = yolo.getObjectName(CameraSource::OAKD, true);
-                    if (scene_object.empty()) {
-                        RCLCPP_INFO(node->get_logger(), "OAKD failed to detect object. Trying WRIST camera...");
-                        scene_object = yolo.getObjectName(CameraSource::WRIST, true);
-                    }
 
                     if (!scene_object.empty()) {
                         float confidence = yolo.getConfidence();
@@ -197,45 +242,45 @@ int main(int argc, char** argv) {
                                     << scene_object << " (confidence: " << confidence << ")" << std::endl;
                         }
 
-                        // Check if it matches the manipulable object, and only place if not placed yet
-                        if (scene_object == manipulable_object && !object_placed) {
-                            RCLCPP_INFO(node->get_logger(), "MATCH FOUND! Manipulable object matches scene object.");
+                        // // Check if it matches the manipulable object, and only place if not placed yet
+                        // if (scene_object == manipulable_object && !object_placed) {
+                        //     RCLCPP_INFO(node->get_logger(), "MATCH FOUND! Manipulable object matches scene object.");
 
-                            // Look for AprilTags for the bin
-                            std::vector<int> candidate_tags = {0, 1, 2, 3, 4};
-                            std::vector<int> visible_tags = apriltag.getVisibleTags(candidate_tags, 100);
+                        //     // Look for AprilTags for the bin
+                        //     std::vector<int> candidate_tags = {0, 1, 2, 3, 4};
+                        //     std::vector<int> visible_tags = apriltag.getVisibleTags(candidate_tags, 100);
 
-                            // TODO: Still not doing anything with april tags. Could use tf to determine exact bin location and update drop pose accordingly, but for now just check if any tag is visible at all as a proxy for "is the bin in front of us"
-                            if (!visible_tags.empty()) {
-                                RCLCPP_INFO(node->get_logger(), "Found bin with AprilTag ID: %d. Placing object.", visible_tags[0]);
+                        //     // TODO: Still not doing anything with april tags. Could use tf to determine exact bin location and update drop pose accordingly, but for now just check if any tag is visible at all as a proxy for "is the bin in front of us"
+                        //     if (!visible_tags.empty()) {
+                        //         RCLCPP_INFO(node->get_logger(), "Found bin with AprilTag ID: %d. Placing object.", visible_tags[0]);
 
-                                // TODO: Update values for drop_pose (x, y, z, qx, qy, qz, qw) (could just be home/carry position)
-                                double drop_x = 0.4;
-                                double drop_y = 0.0;
-                                double drop_z = 0.2;
-                                // Use a valid, normalized quaternion (identity orientation)
-                                double drop_qx = 0.0;
-                                double drop_qy = 0.0;
-                                double drop_qz = 0.0;
-                                double drop_qw = 1.0;
+                        //         // TODO: Update values for drop_pose (x, y, z, qx, qy, qz, qw) (could just be home/carry position)
+                        //         double drop_x = 0.4;
+                        //         double drop_y = 0.0;
+                        //         double drop_z = 0.2;
+                        //         // Use a valid, normalized quaternion (identity orientation)
+                        //         double drop_qx = 0.0;
+                        //         double drop_qy = 0.0;
+                        //         double drop_qz = 0.0;
+                        //         double drop_qw = 1.0;
 
-                                if (arm.moveToCartesianPose(drop_x, drop_y, drop_z, drop_qx, drop_qy, drop_qz, drop_qw)) {
-                                    arm.openGripper();
-                                    RCLCPP_INFO(node->get_logger(), "Object placed successfully in the bin!");
+                        //         if (arm.moveToCartesianPose(drop_x, drop_y, drop_z, drop_qx, drop_qy, drop_qz, drop_qw)) {
+                        //             arm.openGripper();
+                        //             RCLCPP_INFO(node->get_logger(), "Object placed successfully in the bin!");
 
-                                    // Move arm back to carry/rest position
-                                    arm.moveToCartesianPose(0.019, -0.278, 0.243, -0.468, -0.462, -0.533, 0.533);  // home/carry position
+                        //             // Move arm back to carry/rest position
+                        //             arm.moveToCartesianPose(0.019, -0.278, 0.243, -0.468, -0.462, -0.533, 0.533);  // home/carry position
 
-                                    object_placed = true;
-                                } else {
-                                    RCLCPP_ERROR(node->get_logger(), "Failed to move arm to drop position!");
-                                }
-                            } else {
-                                RCLCPP_WARN(node->get_logger(), "Matched object, but no AprilTag found for the bin!");
-                            }
-                        } else if (scene_object == manipulable_object && object_placed) {
-                            RCLCPP_INFO(node->get_logger(), "Matched object found again, but already placed the manipulable object.");
-                        }
+                        //             object_placed = true;
+                        //         } else {
+                        //             RCLCPP_ERROR(node->get_logger(), "Failed to move arm to drop position!");
+                        //         }
+                        //     } else {
+                        //         RCLCPP_WARN(node->get_logger(), "Matched object, but no AprilTag found for the bin!");
+                        //     }
+                        // } else if (scene_object == manipulable_object && object_placed) {
+                        //     RCLCPP_INFO(node->get_logger(), "Matched object found again, but already placed the manipulable object.");
+                        // }
                     } else {
                         RCLCPP_WARN(node->get_logger(), "No scene object detected at box %d.", current_box_idx);
                         if (outfile.is_open()) {

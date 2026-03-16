@@ -21,7 +21,7 @@ class YoloDetectorNode(Node):
         self.get_logger().info('YOLO model loaded')
         
         # Confidence threshold
-        self.confidence_threshold = 0.1
+        self.confidence_threshold = 0.5
 
         # Only these classes are allowed to be returned by the service.
         # Keys are normalized YOLO class names, values are response names.

@@ -14,7 +14,7 @@
 class AprilTagDetector {
 public:
     AprilTagDetector(std::shared_ptr<rclcpp::Node> node,
-                     const std::string& tag_frame_prefix = "tag",
+                     const std::string& tag_frame_prefix = "tag_",
                      const std::string& reference_frame = "base_link");
 
     bool isTagVisible(int tag_id, int timeout_ms = 100);
