@@ -63,7 +63,6 @@ int main(int argc, char** argv) {
         RCLCPP_INFO(node->get_logger(), "Box %zu coordinates: x=%.2f, y=%.2f, phi=%.2f",
                     i, boxes.coords[i][0], boxes.coords[i][1], boxes.coords[i][2]);
     }
-    
 
     // Initialize helper objects
     Navigation nav(node);
@@ -80,12 +79,13 @@ int main(int argc, char** argv) {
     auto start = std::chrono::system_clock::now();
     uint64_t secondsElapsed = 0;
 
+    // Shared cmd_vel publisher used during initial spin and later scan retries.
+    auto vel_pub = node->create_publisher<geometry_msgs::msg::TwistStamped>("/cmd_vel", 10);
+
 
     // Spin 360 degrees in place so AMCL can converge before we record the start pose.
     // The TurtleBot4 expects TwistStamped on /cmd_vel.
     {
-        auto vel_pub = node->create_publisher<geometry_msgs::msg::TwistStamped>("/cmd_vel", 10);
-
         // Spin parameters
         const double angular_speed = 0.5;          // rad/s  (positive = counter-clockwise)
         const double total_angle   = 2.0 * M_PI;   // one full rotation
@@ -140,8 +140,9 @@ int main(int argc, char** argv) {
     bool object_placed = false;
     int current_box_idx = 0;
     bool return_home = false;
-    std::string manipulable_object = "";
+    std::string manipulable_object = "cup";
     bool all_boxes_visited = false;
+    bool manipulate = false;
 
     RCLCPP_INFO(node->get_logger(), "Starting contest - 300 seconds timer begins now!");
 
@@ -230,9 +231,9 @@ int main(int argc, char** argv) {
                     // Detect scene object
                     // We call getObjectName with true to save the detected image
                     std::string scene_object = yolo.getObjectName(CameraSource::OAKD, true);
+                    float confidence = yolo.getConfidence();
 
-                    if (!scene_object.empty()) {
-                        float confidence = yolo.getConfidence();
+                    if (!scene_object.empty() and confidence > 0.6) { // Log any detection, but especially if confidence is reasonably high
                         RCLCPP_INFO(node->get_logger(), "Detected scene object: %s (%.2f)", scene_object.c_str(), confidence);
 
                         // Log detection
@@ -242,7 +243,71 @@ int main(int argc, char** argv) {
                                     << scene_object << " (confidence: " << confidence << ")" << std::endl;
                         }
 
-                        // // Check if it matches the manipulable object, and only place if not placed yet
+                        if (scene_object == manipulable_object && !object_placed) {
+                            manipulate = true;
+                        }
+                    } else {
+                        RCLCPP_WARN(node->get_logger(), "No scene object detected at box %d. Retrying...", current_box_idx);
+                        // if (outfile.is_open()) {
+                        //     outfile << "Box " << current_box_idx << " at ("
+                        //             << target_x << ", " << target_y << ", " << target_phi << "): "
+                        //             << "None detected" << std::endl;
+                        // }
+                        for(int i=0; i<=4; ++i) {
+                            geometry_msgs::msg::TwistStamped cmd;
+                            cmd.header.stamp = node->now();
+                            cmd.twist.linear.x = 0.0;
+                            cmd.twist.angular.z = (i % 2 == 0) ? 0.2 : -0.2; // Alternate between small left and right turns
+                            vel_pub->publish(cmd);
+                            std::this_thread::sleep_for(std::chrono::milliseconds(1500)); // Wait before retrying
+                            RCLCPP_INFO(node->get_logger(), "Retry %d for box %d", i, current_box_idx);
+                            scene_object = yolo.getObjectName(CameraSource::OAKD, true);
+                            float confidence = yolo.getConfidence();
+
+                            if (!scene_object.empty() && confidence > 0.6) {
+                                RCLCPP_INFO(node->get_logger(), "Detected scene object: %s (%.2f)", scene_object.c_str(), confidence);
+
+                                // Log detection
+                                if (outfile.is_open()) {
+                                    outfile << "Box " << current_box_idx << " at ("
+                                            << target_x << ", " << target_y << ", " << target_phi << "): "
+                                            << scene_object << " (confidence: " << confidence << ")" << std::endl;
+                                }
+                                if (scene_object == manipulable_object && !object_placed) {
+                                    manipulate = true;
+                                }
+                                break; // Exit retry loop on successful detection
+                            } else {
+                                RCLCPP_WARN(node->get_logger(), "No scene object detected at box %d on retry %d.", current_box_idx, i);
+                                if (outfile.is_open()) {
+                                    outfile << "Box " << current_box_idx << " at ("
+                                            << target_x << ", " << target_y << ", " << target_phi << "): "
+                                            << "None detected (retry " << i << ")" << std::endl;
+                                }
+                            }
+                            cmd.header.stamp = node->now();
+                            cmd.twist.linear.x = -0.5; // Move backward slightly to try to get a different view
+                            cmd.twist.angular.z = 0.0;
+                            vel_pub->publish(cmd);
+                        }
+                    }
+                } else {
+                    RCLCPP_ERROR(node->get_logger(), "Failed to navigate to box %d", current_box_idx);
+                }
+                if (manipulate) {
+                    RCLCPP_INFO(node->get_logger(), "Cup detected, Attempting to place the manipulable object in the bin at box %d", current_box_idx);
+
+                    // Look for AprilTags for the bin
+                    std::vector<int> candidate_tags = {0, 1, 2, 3, 4};
+                    std::vector<int> visible_tags = apriltag.getVisibleTags(candidate_tags, 100);
+
+                    if (!visible_tags.empty()) {
+                        RCLCPP_INFO(node->get_logger(), "Found bin with AprilTag ID: %d. Placing object.", visible_tags[0]);
+                    }
+                    else {
+                        RCLCPP_WARN(node->get_logger(), "Cup detected but no AprilTag found for the bin at box %d!", current_box_idx);
+                    }
+                    // // Check if it matches the manipulable object, and only place if not placed yet
                         // if (scene_object == manipulable_object && !object_placed) {
                         //     RCLCPP_INFO(node->get_logger(), "MATCH FOUND! Manipulable object matches scene object.");
 
@@ -281,18 +346,7 @@ int main(int argc, char** argv) {
                         // } else if (scene_object == manipulable_object && object_placed) {
                         //     RCLCPP_INFO(node->get_logger(), "Matched object found again, but already placed the manipulable object.");
                         // }
-                    } else {
-                        RCLCPP_WARN(node->get_logger(), "No scene object detected at box %d.", current_box_idx);
-                        if (outfile.is_open()) {
-                            outfile << "Box " << current_box_idx << " at ("
-                                    << target_x << ", " << target_y << ", " << target_phi << "): "
-                                    << "None detected" << std::endl;
-                        }
-                    }
-                } else {
-                    RCLCPP_ERROR(node->get_logger(), "Failed to navigate to box %d", current_box_idx);
                 }
-
                 current_box_idx++;
             } else {
                 all_boxes_visited = true;

@@ -19,7 +19,7 @@ Run colcon build only after in the ros workspace folder (cd ros2_ws)
 ### HOW TO START NAV (every number is in a new terminal)
 1. ssh into robot: run `ssh ubuntu@100.69.127.157`
     - run `ros2 run mie443_contest2 image_capture_server`
-2. on laptop terminal: run `source /contest2/bin/activate`
+2. on laptop terminal: run `source ~/contest2/bin/activate`
     - run `ros2 run mie443_contest2 yolo_detector.py`
 3. Put the robot in the contest space. Run `ros2 launch turtlebot4_navigation localization.launch.py map:=/home/turtlebot/ros2_ws/src/contest2/mie443_contest2/maps/Contest2MapPractice.yaml`. WAIT FOR STARTUP
 4. Run `ros2 launch turtlebot4_viz view_navigation.launch.py`, wait a little, then set the initial pose in rviz. 
