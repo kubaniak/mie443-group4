@@ -211,7 +211,7 @@ int main(int argc, char** argv) {
                 RCLCPP_INFO(node->get_logger(), "YOLO did not detect any objects");
             }
         }
-
+        arm.closeGripper();
         /***YOUR CODE HERE***/
         if (!pickup_done) {
             // 1. Detection and Pickup
@@ -219,11 +219,24 @@ int main(int argc, char** argv) {
             //translation: 0.174, 0.001, 0.272
             //quarternian: 0.100, -0.510, -0.028, 0.854
             // STILL WORKING ON ARM POSES
-            
+            //before gripping
+            //translation: 0.138, -0.021, 0.177
+            //quarternian: -0.009, 0.062, -0.127, 0.990
+            //gripping
+            //translation:0.121, -0.020, 0.155
+            //quarternian: -0.006, 0.039, -0.120, 0.992
+            //dropping
+            //translation: 0.063, -0.264, 0.139
+            //quarternian: -0.060, -0.096, -0.740, 0.663
 
             RCLCPP_INFO(node->get_logger(), "Moving arm to pickup position");
             arm.openGripper();
-            if (arm.moveToCartesianPose(0.151, -0.013, 0.155, -0.005, 0.139, 0.037, 0.990)) {
+            //safe carry position
+            arm.moveToCartesianPose(0.174, 0.001, 0.272, 
+                0.100, -0.510, -0.028, 0.854);
+            arm.moveToCartesianPose(0.138, -0.021, 0.177, 
+                -0.009, 0.062, -0.127, 0.990);
+            if (arm.moveToCartesianPose(0.121, -0.020, 0.155, -0.006, 0.039, -0.120, 0.992)) {
                 arm.closeGripper();
                 RCLCPP_INFO(node->get_logger(), "Object picked up successfully.");
                 RCLCPP_INFO(node->get_logger(), "Attempting to detect manipulable object with WRIST camera");
@@ -239,7 +252,10 @@ int main(int argc, char** argv) {
                 RCLCPP_INFO(node->get_logger(), "Detected manipulable object: %s (confidence: %.2f)", manipulable_object.c_str(), confidence);
 
                 // Move arm to a safe carry position (done)
-                arm.moveToCartesianPose(0.019, -0.278, 0.243, -0.468, -0.462, -0.533, 0.533);  // home/carry position
+                arm.moveToCartesianPose(0.138, -0.021, 0.177, 
+                -0.009, 0.062, -0.127, 0.990);
+                arm.moveToCartesianPose(0.174, 0.001, 0.272, 
+                0.100, -0.510, -0.028, 0.854);  // home/carry position
             } else {
                 RCLCPP_ERROR(node->get_logger(), "Failed to move arm to pickup position!");
             }
