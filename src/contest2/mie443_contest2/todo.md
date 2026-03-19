@@ -26,6 +26,7 @@ Run colcon build only after in the ros workspace folder (cd ros2_ws)
 5. Run `ros2 launch turtlebot4_navigation nav2.launch.py`, wait for it to finish launching
 6. Run `ros2 run mie443_contest2 contest2`
 
+### Real Arm Testing (every number is in a new terminal)
 
 ### Other TODOs if time:
 
