@@ -87,6 +87,7 @@ class YoloDetectorNode(Node):
         best_confidence = -1.0
         class_id = -1
         class_name = ""
+        allowed_detections = []
 
         for idx in range(len(boxes)):
             confidence = float(boxes.conf[idx])
@@ -99,6 +100,8 @@ class YoloDetectorNode(Node):
 
             if normalized_name is None:
                 continue
+
+            allowed_detections.append((idx, normalized_name, confidence))
 
             if confidence > best_confidence:
                 best_idx = idx
@@ -124,7 +127,40 @@ class YoloDetectorNode(Node):
         
         if save_detected_image:
             filename = f"/home/turtlebot/ros2_ws/src/contest2/mie443_contest2/yolo_detections/detection_{class_name}_{confidence:.2f}.jpg"
-            annotated_image = results[0].plot()
+            annotated_image = image.copy()
+
+            # Draw only allowed detections so saved frames match contest scene classes.
+            for idx, normalized_name, det_confidence in allowed_detections:
+                x1, y1, x2, y2 = boxes.xyxy[idx].cpu().numpy().astype(int)
+                label = f"{normalized_name} {det_confidence:.2f}"
+
+                cv2.rectangle(annotated_image, (x1, y1), (x2, y2), (0, 255, 0), 2)
+
+                (text_w, text_h), baseline = cv2.getTextSize(
+                    label,
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.5,
+                    1
+                )
+                text_top = max(0, y1 - text_h - baseline - 4)
+                cv2.rectangle(
+                    annotated_image,
+                    (x1, text_top),
+                    (x1 + text_w + 6, text_top + text_h + baseline + 4),
+                    (0, 255, 0),
+                    -1
+                )
+                cv2.putText(
+                    annotated_image,
+                    label,
+                    (x1 + 3, text_top + text_h + 1),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.5,
+                    (0, 0, 0),
+                    1,
+                    cv2.LINE_AA
+                )
+
             cv2.imwrite(filename, annotated_image)
             self.get_logger().info(f"Saved detected image to {filename}")
         

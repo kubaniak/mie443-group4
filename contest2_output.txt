@@ -1,1 +1,5 @@
-WARNING: All boxes visited; manipulable object was not placed. Returning home.
+Box 0 at (-0.0223823, -1.06485, 0.0497107): None detected (center step 0)
+Box 0 at (-0.0223823, -1.06485, 0.0497107): None detected (left step 1)
+Box 0 at (-0.0223823, -1.06485, 0.0497107): None detected (left step 2)
+Box 0 at (-0.0223823, -1.06485, 0.0497107): None detected (right step 1)
+Box 0 at (-0.0223823, -1.06485, 0.0497107): None detected (right step 2)
