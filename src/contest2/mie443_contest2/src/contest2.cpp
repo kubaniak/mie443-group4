@@ -12,6 +12,8 @@
 #include <fstream>
 #include <sstream>
 #include <cmath>
+#include <unordered_set>
+#include <vector>
 
 int main(int argc, char** argv) {
     // Setup ROS 2
@@ -146,6 +148,74 @@ int main(int argc, char** argv) {
     bool manipulate = false;
     bool use_nav2_for_tag_align = false;
 
+    // OAK-D scene objects are single-use: once detected confidently, we stop looking for that class.
+    const std::vector<std::string> scene_class_order = {
+        "cup", "motorcycle", "clock", "plant", "water bottle"
+    };
+    std::unordered_set<std::string> remaining_scene_objects(
+        scene_class_order.begin(), scene_class_order.end());
+
+    auto format_remaining_scene_objects = [&]() -> std::string {
+        std::ostringstream oss;
+        bool first = true;
+        for (const auto& class_name : scene_class_order) {
+            if (remaining_scene_objects.find(class_name) == remaining_scene_objects.end()) {
+                continue;
+            }
+            if (!first) {
+                oss << ", ";
+            }
+            oss << class_name;
+            first = false;
+        }
+        return first ? "none" : oss.str();
+    };
+
+    auto process_scene_detection = [&](const std::string& scene_object,
+                                       float confidence,
+                                       const std::string& context_label,
+                                       double log_x,
+                                       double log_y,
+                                       double log_phi,
+                                       float min_detection_confidence) -> bool {
+        if (scene_object.empty() || confidence <= min_detection_confidence) {
+            return false;
+        }
+
+        if (remaining_scene_objects.find(scene_object) == remaining_scene_objects.end()) {
+            RCLCPP_INFO(node->get_logger(),
+                        "Ignoring already checked-off object '%s' (%.2f) during %s.",
+                        scene_object.c_str(), confidence, context_label.c_str());
+            if (outfile.is_open()) {
+                outfile << "Box " << current_box_idx << " at ("
+                        << log_x << ", " << log_y << ", " << log_phi << "): "
+                        << "IGNORED checked-off object " << scene_object
+                        << " (confidence: " << confidence << ", " << context_label << ")" << std::endl;
+            }
+            return false;
+        }
+
+        remaining_scene_objects.erase(scene_object);
+        RCLCPP_INFO(node->get_logger(),
+                    "Detected new scene object: %s (%.2f) during %s. Remaining: [%s]",
+                    scene_object.c_str(), confidence, context_label.c_str(),
+                    format_remaining_scene_objects().c_str());
+
+        if (outfile.is_open()) {
+            outfile << "Box " << current_box_idx << " at ("
+                    << log_x << ", " << log_y << ", " << log_phi << "): "
+                    << scene_object << " (confidence: " << confidence << ", " << context_label << ")"
+                    << std::endl;
+            outfile << "CHECKED_OFF: " << scene_object
+                    << " | Remaining: [" << format_remaining_scene_objects() << "]" << std::endl;
+        }
+
+        if (scene_object == manipulable_object && !object_placed) {
+            manipulate = true;
+        }
+        return true;
+    };
+
     RCLCPP_INFO(node->get_logger(), "Starting contest - 300 seconds timer begins now!");
 
     // Execute strategy
@@ -236,21 +306,17 @@ int main(int argc, char** argv) {
                     float confidence = yolo.getConfidence();
                     const float min_detection_confidence = 0.6f;
 
-                    if (!scene_object.empty() && confidence > min_detection_confidence) {
-                        RCLCPP_INFO(node->get_logger(), "Detected scene object: %s (%.2f)", scene_object.c_str(), confidence);
-
-                        // Log detection
-                        if (outfile.is_open()) {
-                            outfile << "Box " << current_box_idx << " at ("
-                                    << target_x << ", " << target_y << ", " << target_phi << "): "
-                                    << scene_object << " (confidence: " << confidence << ")" << std::endl;
-                        }
-
-                        if (scene_object == manipulable_object && !object_placed) {
-                            manipulate = true;
-                        }
-                    } else {
-                        RCLCPP_WARN(node->get_logger(), "No scene object detected at box %d. Retrying...", current_box_idx);
+                    if (!process_scene_detection(
+                            scene_object,
+                            confidence,
+                            "initial view",
+                            target_x,
+                            target_y,
+                            target_phi,
+                            min_detection_confidence)) {
+                        RCLCPP_WARN(node->get_logger(),
+                                    "No usable scene object detected at box %d. Retrying...",
+                                    current_box_idx);
                         const double pan_speed = 0.08;  // rad/s
                         const int pan_steps = 5;
                         const int pan_step_ms = 900;
@@ -266,25 +332,25 @@ int main(int argc, char** argv) {
                                 scene_object = yolo.getObjectName(CameraSource::OAKD, true);
                                 confidence = yolo.getConfidence();
 
-                                if (!scene_object.empty() && confidence > min_detection_confidence) {
-                                    RCLCPP_INFO(node->get_logger(), "Detected scene object: %s (%.2f)", scene_object.c_str(), confidence);
-                                    if (outfile.is_open()) {
-                                        outfile << "Box " << current_box_idx << " at ("
-                                                << scan_target_x << ", " << scan_target_y << ", " << scan_target_phi << "): "
-                                                << scene_object << " (confidence: " << confidence << ")" << std::endl;
-                                    }
-                                    if (scene_object == manipulable_object && !object_placed) {
-                                        manipulate = true;
-                                    }
+                                const std::string attempt_context =
+                                    attempt_label + " " + phase + " step " + std::to_string(step_idx);
+                                if (process_scene_detection(
+                                        scene_object,
+                                        confidence,
+                                        attempt_context,
+                                        scan_target_x,
+                                        scan_target_y,
+                                        scan_target_phi,
+                                        min_detection_confidence)) {
                                     return true;
                                 }
 
-                                RCLCPP_WARN(node->get_logger(), "No scene object detected at box %d during %s %s step %d.",
+                                RCLCPP_WARN(node->get_logger(), "No usable scene object detected at box %d during %s %s step %d.",
                                             current_box_idx, attempt_label.c_str(), phase.c_str(), step_idx);
                                 if (outfile.is_open()) {
                                     outfile << "Box " << current_box_idx << " at ("
                                             << scan_target_x << ", " << scan_target_y << ", " << scan_target_phi << "): "
-                                            << "None detected (" << attempt_label << " " << phase
+                                            << "None usable detected (" << attempt_label << " " << phase
                                             << " step " << step_idx << ")" << std::endl;
                                 }
                                 return false;
