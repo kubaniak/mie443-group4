@@ -70,7 +70,7 @@ int main(int argc, char** argv) {
     // ArmController arm(node);
     AprilTagDetector apriltag(node);
 
-    std::ofstream outfile("contest2_output.txt");
+    std::ofstream outfile("contest2_output.txt", std::ios_base::app);
     if (!outfile.is_open()) {
         RCLCPP_WARN(node->get_logger(), "Could not open contest2_output.txt for writing");
     }

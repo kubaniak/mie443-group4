@@ -2,12 +2,12 @@ To preview this file: Ctrl+Shift+V
 
 ### TODO ON THURSDAY
 - Currently: 
+    - (DONE) We implemented a panning scan when an object is not immediately detected.
     - We navigate and face the objects with an offset of 0.5. This worked quite fine, but it can be tweaked. 
-    - If we don't detect an object, we just continue. This is bad. We should keep trying to see an object. LINE 234, object detected, else (LINE 284) we just log a warning. We should do something with looking left/right, running yolo multiple times?
 - What we want:
-    - Detect the object, and stay in the area until we do (turning side to side, etc). 
+    - (DONE) Added panning behavior to turn side to side and retry YOLO detection.
     - Still have a fallback (if it takes more than 30 sec? continue. We missed that object)
-    - fix the outfile issues, file not updating properly. I think it's overwriting everything. (see working_outputs.png, should have saved viewed objects)
+    - (DONE) outfile is opened once and remains open instead of being overwritten (or use append mode: std::ios_base::app if reopening is needed, though currently it is open the whole time).
 
 
     - Optional: Retry if time remaining, only visiting locations where no object was yolo'd
@@ -29,7 +29,10 @@ Run colcon build only after in the ros workspace folder (cd ros2_ws)
 
 ### Other TODOs if time:
 
-- Drop Position
+- (DONE) Added `std::ios_base::app` to `contest2_output.txt` so that it doesn't overwrite between runs/restarts.
+- Fine-tune AprilTag-based alignment (already merged in #8) and verify stability on site.
+- Implement exact bin drop position logic (uncomment/tune logic in `contest2.cpp` for exact `drop_pose`).
+
 - Time Management (navigate home when 20s remaining, e.g.)
 
 - We are currently not really using the apriltags to our advantage. Multi-angle detection? Localization, what to do with the robot once we have the apriltag. 
