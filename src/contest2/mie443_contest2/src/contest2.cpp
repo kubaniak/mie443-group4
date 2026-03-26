@@ -81,12 +81,12 @@ int main(int argc, char** argv) {
 
 
 
+    // Shared cmd_vel publisher used during initial spin, scan retries, and alignment.
+    auto vel_pub = node->create_publisher<geometry_msgs::msg::TwistStamped>("/cmd_vel", 10);
+
     // Spin 360 degrees in place so AMCL can converge before we record the start pose.
     // The TurtleBot4 expects TwistStamped on /cmd_vel.
     {
-        // Shared cmd_vel publisher used during initial spin and later scan retries.
-        auto vel_pub = node->create_publisher<geometry_msgs::msg::TwistStamped>("/cmd_vel", 10);
-        
         // Spin parameters
         const double angular_speed = 0.5;          // rad/s  (positive = counter-clockwise)
         const double total_angle   = 2.0 * M_PI;   // one full rotation
@@ -144,6 +144,7 @@ int main(int argc, char** argv) {
     std::string manipulable_object = "cup";
     bool all_boxes_visited = false;
     bool manipulate = false;
+    bool use_nav2_for_tag_align = false;
 
     RCLCPP_INFO(node->get_logger(), "Starting contest - 300 seconds timer begins now!");
 
@@ -341,7 +342,105 @@ int main(int argc, char** argv) {
                     std::vector<int> visible_tags = apriltag.getVisibleTags(candidate_tags, 100);
 
                     if (!visible_tags.empty()) {
-                        RCLCPP_INFO(node->get_logger(), "Found bin with AprilTag ID: %d. Placing object.", visible_tags[0]);
+                        RCLCPP_INFO(node->get_logger(), "Found bin with AprilTag ID: %d. Aligning with tag...", visible_tags[0]);
+
+                        auto tag_pose_opt = apriltag.getTagPose(visible_tags[0]);
+                        if (tag_pose_opt.has_value()) {
+                            auto tag_pose = tag_pose_opt.value();
+                            double tag_x = tag_pose.position.x;
+                            double tag_y = tag_pose.position.y;
+                            RCLCPP_INFO(node->get_logger(), "Tag relative pose: x=%.2f, y=%.2f", tag_x, tag_y);
+
+                            // Placeholder values for desired distance and offset from tag
+                            double desired_distance_x = 0.3; // Stop 0.3m in front of the tag
+                            double desired_distance_y = 0.0; // Centered with the tag
+
+                            double error_x = tag_x - desired_distance_x;
+                            double error_y = tag_y - desired_distance_y;
+
+                            if (use_nav2_for_tag_align) {
+                                // Variation 1: Use Nav2
+                                RCLCPP_INFO(node->get_logger(), "Using Nav2 to align with tag...");
+
+                                // Calculate global pose
+                                // tag_x and tag_y are in base_link.
+                                // To move base_link by (error_x, error_y):
+                                double goal_x = robotPose.x + error_x * cos(robotPose.phi) - error_y * sin(robotPose.phi);
+                                double goal_y = robotPose.y + error_x * sin(robotPose.phi) + error_y * cos(robotPose.phi);
+                                double goal_phi = robotPose.phi; // Keep current orientation or face the tag
+
+                                RCLCPP_INFO(node->get_logger(), "Aligning to global pose: x=%.2f, y=%.2f", goal_x, goal_y);
+                                if (!nav.moveToGoal(goal_x, goal_y, goal_phi)) {
+                                    RCLCPP_WARN(node->get_logger(), "Failed to align using Nav2!");
+                                }
+                            } else {
+                                // Variation 2: Use Control Loop
+                                RCLCPP_INFO(node->get_logger(), "Using Control Loop to align with tag...");
+
+                                const double kP_linear = 0.5;
+                                const double kP_angular = 1.0;
+                                const double dist_tolerance = 0.05;
+                                const double angle_tolerance = 0.05;
+
+                                rclcpp::Rate loop_rate(10); // 10 Hz
+                                auto align_start = std::chrono::system_clock::now();
+
+                                while (rclcpp::ok()) {
+                                    auto align_now = std::chrono::system_clock::now();
+                                    if (std::chrono::duration_cast<std::chrono::seconds>(align_now - align_start).count() > 10) {
+                                        RCLCPP_WARN(node->get_logger(), "Alignment timeout!");
+                                        break;
+                                    }
+
+                                    // Refresh tag pose
+                                    auto current_tag_pose_opt = apriltag.getTagPose(visible_tags[0]);
+                                    if (!current_tag_pose_opt.has_value()) {
+                                        RCLCPP_WARN(node->get_logger(), "Lost sight of tag during alignment!");
+                                        break;
+                                    }
+
+                                    auto current_tag_pose = current_tag_pose_opt.value();
+                                    double curr_tag_x = current_tag_pose.position.x;
+                                    double curr_tag_y = current_tag_pose.position.y;
+
+                                    double err_x = curr_tag_x - desired_distance_x;
+                                    double err_y = curr_tag_y - desired_distance_y;
+
+                                    if (std::abs(err_x) < dist_tolerance && std::abs(err_y) < angle_tolerance) {
+                                        RCLCPP_INFO(node->get_logger(), "Successfully aligned with tag.");
+                                        break;
+                                    }
+
+                                    geometry_msgs::msg::TwistStamped cmd;
+                                    cmd.header.stamp = node->now();
+                                    // Move forward/backward based on error in X
+                                    cmd.twist.linear.x = kP_linear * err_x;
+                                    // Rotate to correct error in Y (since Y is left/right)
+                                    // If tag is to the left (positive Y), we need to turn left (positive angular Z)
+                                    cmd.twist.angular.z = kP_angular * err_y;
+
+                                    // Cap speeds
+                                    if (cmd.twist.linear.x > 0.2) cmd.twist.linear.x = 0.2;
+                                    if (cmd.twist.linear.x < -0.2) cmd.twist.linear.x = -0.2;
+                                    if (cmd.twist.angular.z > 0.5) cmd.twist.angular.z = 0.5;
+                                    if (cmd.twist.angular.z < -0.5) cmd.twist.angular.z = -0.5;
+
+                                    vel_pub->publish(cmd);
+
+                                    rclcpp::spin_some(node);
+                                    loop_rate.sleep();
+                                }
+
+                                // Stop robot
+                                geometry_msgs::msg::TwistStamped stop_cmd;
+                                stop_cmd.header.stamp = node->now();
+                                stop_cmd.twist.linear.x = 0.0;
+                                stop_cmd.twist.angular.z = 0.0;
+                                vel_pub->publish(stop_cmd);
+                            }
+                        } else {
+                            RCLCPP_WARN(node->get_logger(), "Failed to get pose for visible tag %d!", visible_tags[0]);
+                        }
                     }
                     else {
                         RCLCPP_WARN(node->get_logger(), "Cup detected but no AprilTag found for the bin at box %d!", current_box_idx);
