@@ -14,44 +14,50 @@ from ultralytics import YOLO
 
 class YoloDetectorNode(Node):
     def __init__(self):
-        super().__init__('yolo_detector')
-        
+        super().__init__("yolo_detector")
+
         # Load YOLO model
-        self.model = YOLO('yolov8n.pt')
-        self.get_logger().info('YOLO model loaded')
-        
+        self.model = YOLO("yolov8n.pt")
+        self.get_logger().info("YOLO model loaded")
+
         # Confidence threshold
         self.confidence_threshold = 0.5
 
         # Only these classes are allowed to be returned by the service.
         # Keys are normalized YOLO class names, values are response names.
         self.allowed_classes = {
-            'cup': 'cup',
-            'motorcycle': 'motorcycle',
-            'clock': 'clock',
-            'potted plant': 'plant',
-            'plant': 'plant',
-            'bottle': 'water bottle',
-            'water bottle': 'water bottle',
+            "cup": "cup",
+            "motorcycle": "motorcycle",
+            "clock": "clock",
+            "potted plant": "plant",
+            "plant": "plant",
+            "bottle": "water bottle",
+            "water bottle": "water bottle",
         }
-        
+
+        # Pre-compute a mapping from class ID directly to the allowed response name
+        # to avoid repeating string conversions and dictionary lookups per detection.
+        self._class_id_to_normalized_name = {}
+        for class_id, class_name in self.model.names.items():
+            norm_name = self.allowed_classes.get(str(class_name).lower())
+            if norm_name is not None:
+                self._class_id_to_normalized_name[class_id] = norm_name
+
         # Create service
         self.service = self.create_service(
-            DetectObject,
-            'detect_object',
-            self.detect_callback
+            DetectObject, "detect_object", self.detect_callback
         )
-        
-        self.get_logger().info('YOLO Detector Service ready')
+
+        self.get_logger().info("YOLO Detector Service ready")
 
     def detect_callback(self, request, response):
         """Process image and return highest confidence detection."""
-        
+
         # Decode compressed image
         np_arr = np.frombuffer(request.image.data, np.uint8)
         save_detected_image = request.save_detected_image
         image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
-        
+
         if image is None:
             response.success = False
             response.class_id = -1
@@ -59,9 +65,9 @@ class YoloDetectorNode(Node):
             response.confidence = 0.0
             response.message = "Failed to decode image"
             return response
-        
+
         # Run YOLO inference
-        results = self.model(image, verbose=False, device='cpu')
+        results = self.model(image, verbose=False, device="cpu")
         boxes = results[0].boxes
 
         if boxes is None or len(boxes) == 0:
@@ -71,7 +77,7 @@ class YoloDetectorNode(Node):
             response.confidence = 0.0
             response.message = "No objects detected"
             return response
-        
+
         # Filter by confidence threshold
         mask = boxes.conf >= self.confidence_threshold
         if not mask.any():
@@ -79,7 +85,9 @@ class YoloDetectorNode(Node):
             response.class_id = -1
             response.class_name = ""
             response.confidence = 0.0
-            response.message = f"No detections above confidence {self.confidence_threshold} threshold"
+            response.message = (
+                f"No detections above confidence {self.confidence_threshold} threshold"
+            )
             return response
 
         # Keep only allowed classes and select the highest-confidence one.
@@ -95,8 +103,7 @@ class YoloDetectorNode(Node):
                 continue
 
             detected_class_id = int(boxes.cls[idx])
-            detected_class_name = str(self.model.names[detected_class_id]).lower()
-            normalized_name = self.allowed_classes.get(detected_class_name)
+            normalized_name = self._class_id_to_normalized_name.get(detected_class_id)
 
             if normalized_name is None:
                 continue
@@ -123,8 +130,12 @@ class YoloDetectorNode(Node):
         response.class_id = class_id
         response.class_name = class_name
         response.confidence = confidence
-        response.message = "Detection successful {class_name} with confidence {confidence:.2f}".format(class_name=class_name, confidence=confidence)
-        
+        response.message = (
+            "Detection successful {class_name} with confidence {confidence:.2f}".format(
+                class_name=class_name, confidence=confidence
+            )
+        )
+
         if save_detected_image:
             filename = f"/home/turtlebot/ros2_ws/src/contest2/mie443_contest2/yolo_detections/detection_{class_name}_{confidence:.2f}.jpg"
             annotated_image = image.copy()
@@ -137,10 +148,7 @@ class YoloDetectorNode(Node):
                 cv2.rectangle(annotated_image, (x1, y1), (x2, y2), (0, 255, 0), 2)
 
                 (text_w, text_h), baseline = cv2.getTextSize(
-                    label,
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.5,
-                    1
+                    label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1
                 )
                 text_top = max(0, y1 - text_h - baseline - 4)
                 cv2.rectangle(
@@ -148,7 +156,7 @@ class YoloDetectorNode(Node):
                     (x1, text_top),
                     (x1 + text_w + 6, text_top + text_h + baseline + 4),
                     (0, 255, 0),
-                    -1
+                    -1,
                 )
                 cv2.putText(
                     annotated_image,
@@ -158,13 +166,15 @@ class YoloDetectorNode(Node):
                     0.5,
                     (0, 0, 0),
                     1,
-                    cv2.LINE_AA
+                    cv2.LINE_AA,
                 )
 
             cv2.imwrite(filename, annotated_image)
             self.get_logger().info(f"Saved detected image to {filename}")
-        
-        self.get_logger().info(f"Detection: {class_name} (ID: {class_id}) with confidence {confidence:.2f}")
+
+        self.get_logger().info(
+            f"Detection: {class_name} (ID: {class_id}) with confidence {confidence:.2f}"
+        )
         return response
 
 
@@ -175,5 +185,5 @@ def main(args=None):
     rclpy.shutdown()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
