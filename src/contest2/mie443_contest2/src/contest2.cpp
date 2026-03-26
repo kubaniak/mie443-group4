@@ -404,9 +404,30 @@ int main(int argc, char** argv) {
                                     double curr_tag_y = current_tag_pose.position.y;
 
                                     double err_x = curr_tag_x - desired_distance_x;
+                                    // In addition to lateral error (Y), let's calculate the heading error to ensure we are facing the tag squarely.
+                                    // The tag's orientation in base_link tells us how much we need to rotate to face it.
+
+                                    // Get yaw from quaternion
+                                    tf2::Quaternion q(
+                                        current_tag_pose.orientation.x,
+                                        current_tag_pose.orientation.y,
+                                        current_tag_pose.orientation.z,
+                                        current_tag_pose.orientation.w);
+                                    tf2::Matrix3x3 m(q);
+                                    double roll, pitch, yaw;
+                                    m.getRPY(roll, pitch, yaw);
+
+                                    // yaw is the angle of the tag's Z-axis (forward) relative to our X-axis.
+                                    // If we want to face the tag directly, our desired relative yaw should be pi or -pi (depending on tag orientation convention)
+                                    // Wait, the tag's Z axis normally points OUT of the tag. If we want to face it, the tag's Z should point towards us (180 degrees from our X).
+                                    // Or simply use the tag's relative X and Y to compute the angle we need to turn: atan2(Y, X).
+                                    // The lateral error (Y) gets smaller as we point towards it, but we could be pointing towards it while being offset sideways.
+                                    // Using atan2(Y, X) is a simple heading controller. Let's use that as the primary angular error.
+
+                                    double heading_error = std::atan2(curr_tag_y, curr_tag_x);
                                     double err_y = curr_tag_y - desired_distance_y;
 
-                                    if (std::abs(err_x) < dist_tolerance && std::abs(err_y) < angle_tolerance) {
+                                    if (std::abs(err_x) < dist_tolerance && std::abs(heading_error) < angle_tolerance) {
                                         RCLCPP_INFO(node->get_logger(), "Successfully aligned with tag.");
                                         break;
                                     }
@@ -415,9 +436,8 @@ int main(int argc, char** argv) {
                                     cmd.header.stamp = node->now();
                                     // Move forward/backward based on error in X
                                     cmd.twist.linear.x = kP_linear * err_x;
-                                    // Rotate to correct error in Y (since Y is left/right)
-                                    // If tag is to the left (positive Y), we need to turn left (positive angular Z)
-                                    cmd.twist.angular.z = kP_angular * err_y;
+                                    // Rotate to correct heading error (pointing towards the tag)
+                                    cmd.twist.angular.z = kP_angular * heading_error;
 
                                     // Cap speeds
                                     if (cmd.twist.linear.x > 0.2) cmd.twist.linear.x = 0.2;
