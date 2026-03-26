@@ -155,6 +155,14 @@ class So101Bridge(Node):
         # Joint state publisher
         self.joint_state_pub = self.create_publisher(JointState, 'joint_states', 10)
 
+        # Direct joint command subscriber (bypasses MoveIt)
+        self.joint_cmd_sub = self.create_subscription(
+            JointState,
+            'joint_commands',
+            self.joint_command_callback,
+            10
+        )
+
         # Timer for publishing joint states
         period = 1.0 / joint_state_rate
         self.joint_state_timer = self.create_timer(period, self.publish_joint_states)
@@ -170,6 +178,7 @@ class So101Bridge(Node):
         self.get_logger().info("  - Arm action server: arm_controller/follow_joint_trajectory")
         self.get_logger().info("  - Gripper action server: gripper_controller/follow_joint_trajectory")
         self.get_logger().info("  - Publishing joint states to: /joint_states")
+        self.get_logger().info("  - Direct joint commands: /joint_commands")
         self.get_logger().info("  - Wrist camera service: wrist_camera/capture_image")
         self.get_logger().info("  - Using linear interpolation for unit conversion")
 
@@ -235,6 +244,30 @@ class So101Bridge(Node):
         lerobot_value = max(lerobot["min"], min(lerobot["max"], lerobot_value))
         
         return lerobot_value
+
+    # ==================== Direct Joint Command ====================
+
+    def joint_command_callback(self, msg):
+        """Callback for direct joint commands (bypasses MoveIt).
+        
+        Expects a JointState message with URDF joint names ("1"-"6") and positions in radians.
+        """
+        if len(msg.name) != len(msg.position):
+            self.get_logger().error("joint_commands: name/position length mismatch")
+            return
+
+        positions = {}
+        for name, pos in zip(msg.name, msg.position):
+            if name in self.JOINT_MAP:
+                positions[name] = pos
+            else:
+                self.get_logger().warn(f"Unknown joint in command: {name}")
+
+        if positions:
+            try:
+                self.send_positions_to_robot(positions)
+            except Exception as e:
+                self.get_logger().error(f"Direct joint command failed: {e}")
 
     # ==================== Callbacks ====================
 
