@@ -212,6 +212,8 @@ int main(int argc, char** argv) {
 
         if (scene_object == manipulable_object && !object_placed) {
             manipulate = true;
+            RCLCPP_INFO(node->get_logger(), "Manipulable object '%s' detected! Will attempt to place in bin at box %d.",
+                        manipulable_object.c_str(), current_box_idx);
         }
         return true;
     };
