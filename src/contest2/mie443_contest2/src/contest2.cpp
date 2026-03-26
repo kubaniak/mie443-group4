@@ -210,7 +210,7 @@ int main(int argc, char** argv) {
                 double box_phi = boxes.coords[current_box_idx][2];
 
                 // Configure offset
-                double box_offset = 0.5;
+                double box_offset = 0.7;
 
                 // Adjust the target based on the offset and orientation
                 double target_x = box_x + box_offset * cos(box_phi);
@@ -252,84 +252,118 @@ int main(int argc, char** argv) {
                     } else {
                         RCLCPP_WARN(node->get_logger(), "No scene object detected at box %d. Retrying...", current_box_idx);
                         const double pan_speed = 0.08;  // rad/s
-                        const int pan_steps = 2;
+                        const int pan_steps = 5;
                         const int pan_step_ms = 900;
                         const int settle_ms = 250;
-                        bool detected_in_scan = false;
+                        double scan_target_x = target_x;
+                        double scan_target_y = target_y;
+                        double scan_target_phi = target_phi;
 
-                        auto try_detection = [&](const std::string &phase, int step_idx) -> bool {
-                            RCLCPP_INFO(node->get_logger(), "%s step %d: running YOLO", phase.c_str(), step_idx);
-                            scene_object = yolo.getObjectName(CameraSource::OAKD, true);
-                            confidence = yolo.getConfidence();
+                        auto run_panning_scan = [&](const std::string& attempt_label) -> bool {
+                            auto try_detection = [&](const std::string& phase, int step_idx) -> bool {
+                                RCLCPP_INFO(node->get_logger(), "%s %s step %d: running YOLO",
+                                            attempt_label.c_str(), phase.c_str(), step_idx);
+                                scene_object = yolo.getObjectName(CameraSource::OAKD, true);
+                                confidence = yolo.getConfidence();
 
-                            if (!scene_object.empty() && confidence > min_detection_confidence) {
-                                RCLCPP_INFO(node->get_logger(), "Detected scene object: %s (%.2f)", scene_object.c_str(), confidence);
+                                if (!scene_object.empty() && confidence > min_detection_confidence) {
+                                    RCLCPP_INFO(node->get_logger(), "Detected scene object: %s (%.2f)", scene_object.c_str(), confidence);
+                                    if (outfile.is_open()) {
+                                        outfile << "Box " << current_box_idx << " at ("
+                                                << scan_target_x << ", " << scan_target_y << ", " << scan_target_phi << "): "
+                                                << scene_object << " (confidence: " << confidence << ")" << std::endl;
+                                    }
+                                    if (scene_object == manipulable_object && !object_placed) {
+                                        manipulate = true;
+                                    }
+                                    return true;
+                                }
+
+                                RCLCPP_WARN(node->get_logger(), "No scene object detected at box %d during %s %s step %d.",
+                                            current_box_idx, attempt_label.c_str(), phase.c_str(), step_idx);
                                 if (outfile.is_open()) {
                                     outfile << "Box " << current_box_idx << " at ("
-                                            << target_x << ", " << target_y << ", " << target_phi << "): "
-                                            << scene_object << " (confidence: " << confidence << ")" << std::endl;
+                                            << scan_target_x << ", " << scan_target_y << ", " << scan_target_phi << "): "
+                                            << "None detected (" << attempt_label << " " << phase
+                                            << " step " << step_idx << ")" << std::endl;
                                 }
-                                if (scene_object == manipulable_object && !object_placed) {
-                                    manipulate = true;
-                                }
-                                return true;
+                                return false;
+                            };
+
+                            bool detected_in_scan = false;
+
+                            RCLCPP_INFO(node->get_logger(), "Realigning to target yaw before %s scan retries...", attempt_label.c_str());
+                            if (!nav.moveToGoal(scan_target_x, scan_target_y, scan_target_phi)) {
+                                RCLCPP_WARN(node->get_logger(),
+                                            "Failed to re-align to target yaw before %s scanning at box %d.",
+                                            attempt_label.c_str(), current_box_idx);
                             }
 
-                            RCLCPP_WARN(node->get_logger(), "No scene object detected at box %d during %s step %d.",
-                                        current_box_idx, phase.c_str(), step_idx);
-                            if (outfile.is_open()) {
-                                outfile << "Box " << current_box_idx << " at ("
-                                        << target_x << ", " << target_y << ", " << target_phi << "): "
-                                        << "None detected (" << phase << " step " << step_idx << ")" << std::endl;
+                            // Try once from centered view before panning.
+                            detected_in_scan = try_detection("center", 0);
+
+                            for (int side = 0; side < 2 && !detected_in_scan; ++side) {
+                                const bool scan_left = (side == 0);
+                                const std::string phase = scan_left ? "left" : "right";
+                                const double direction = scan_left ? 1.0 : -1.0;
+
+                                for (int step = 1; step <= pan_steps && !detected_in_scan; ++step) {
+                                    geometry_msgs::msg::TwistStamped cmd;
+                                    cmd.header.stamp = node->now();
+                                    cmd.twist.linear.x = 0.0;
+                                    cmd.twist.angular.z = direction * pan_speed;
+                                    vel_pub->publish(cmd);
+                                    std::this_thread::sleep_for(std::chrono::milliseconds(pan_step_ms));
+
+                                    geometry_msgs::msg::TwistStamped stop_cmd;
+                                    stop_cmd.header.stamp = node->now();
+                                    stop_cmd.twist.linear.x = 0.0;
+                                    stop_cmd.twist.angular.z = 0.0;
+                                    vel_pub->publish(stop_cmd);
+                                    std::this_thread::sleep_for(std::chrono::milliseconds(settle_ms));
+
+                                    detected_in_scan = try_detection(phase, step);
+                                }
+
+                                if (!detected_in_scan) {
+                                    RCLCPP_INFO(node->get_logger(), "Re-centering to target yaw after %s scan.", phase.c_str());
+                                    if (!nav.moveToGoal(scan_target_x, scan_target_y, scan_target_phi)) {
+                                        RCLCPP_WARN(node->get_logger(),
+                                                    "Failed to re-center after %s scan at box %d.",
+                                                    phase.c_str(), current_box_idx);
+                                    }
+                                }
                             }
-                            return false;
+
+                            // Ensure robot is stopped after scan motions.
+                            geometry_msgs::msg::TwistStamped final_stop_cmd;
+                            final_stop_cmd.header.stamp = node->now();
+                            final_stop_cmd.twist.linear.x = 0.0;
+                            final_stop_cmd.twist.angular.z = 0.0;
+                            vel_pub->publish(final_stop_cmd);
+
+                            return detected_in_scan;
                         };
 
-                        RCLCPP_INFO(node->get_logger(), "Realigning to target yaw before scan retries...");
-                        if (!nav.moveToGoal(target_x, target_y, target_phi)) {
-                            RCLCPP_WARN(node->get_logger(), "Failed to re-align to target yaw before scanning at box %d.", current_box_idx);
-                        }
+                        bool detected_in_scan = run_panning_scan("initial");
 
-                        // Try once from centered view before panning.
-                        detected_in_scan = try_detection("center", 0);
+                        // If the first scan misses, move closer and run the same panning procedure again.
+                        if (!detected_in_scan) {
+                            const double closer_offset = 0.3;
+                            scan_target_x = box_x + closer_offset * cos(box_phi);
+                            scan_target_y = box_y + closer_offset * sin(box_phi);
+                            scan_target_phi = target_phi;
 
-                        for (int side = 0; side < 2 && !detected_in_scan; ++side) {
-                            const bool scan_left = (side == 0);
-                            const std::string phase = scan_left ? "left" : "right";
-                            const double direction = scan_left ? 1.0 : -1.0;
+                            RCLCPP_INFO(node->get_logger(),
+                                        "Initial panning found nothing at box %d. Moving closer and retrying scan at (%.2f, %.2f, %.2f).",
+                                        current_box_idx, scan_target_x, scan_target_y, scan_target_phi);
 
-                            for (int step = 1; step <= pan_steps && !detected_in_scan; ++step) {
-                                geometry_msgs::msg::TwistStamped cmd;
-                                cmd.header.stamp = node->now();
-                                cmd.twist.linear.x = 0.0;
-                                cmd.twist.angular.z = direction * pan_speed;
-                                vel_pub->publish(cmd);
-                                std::this_thread::sleep_for(std::chrono::milliseconds(pan_step_ms));
-
-                                geometry_msgs::msg::TwistStamped stop_cmd;
-                                stop_cmd.header.stamp = node->now();
-                                stop_cmd.twist.linear.x = 0.0;
-                                stop_cmd.twist.angular.z = 0.0;
-                                vel_pub->publish(stop_cmd);
-                                std::this_thread::sleep_for(std::chrono::milliseconds(settle_ms));
-
-                                detected_in_scan = try_detection(phase, step);
-                            }
-
-                            if (!detected_in_scan) {
-                                RCLCPP_INFO(node->get_logger(), "Re-centering to target yaw after %s scan.", phase.c_str());
-                                if (!nav.moveToGoal(target_x, target_y, target_phi)) {
-                                    RCLCPP_WARN(node->get_logger(), "Failed to re-center after %s scan at box %d.", phase.c_str(), current_box_idx);
-                                }
+                            if (nav.moveToGoal(scan_target_x, scan_target_y, scan_target_phi)) {
+                                detected_in_scan = run_panning_scan("closer");
+                            } else {
+                                RCLCPP_WARN(node->get_logger(), "Failed to move closer for retry scan at box %d.", current_box_idx);
                             }
                         }
-
-                        // Ensure robot is stopped after scan motions.
-                        geometry_msgs::msg::TwistStamped final_stop_cmd;
-                        final_stop_cmd.header.stamp = node->now();
-                        final_stop_cmd.twist.linear.x = 0.0;
-                        final_stop_cmd.twist.angular.z = 0.0;
-                        vel_pub->publish(final_stop_cmd);
                     }
                 } else {
                     RCLCPP_ERROR(node->get_logger(), "Failed to navigate to box %d", current_box_idx);
