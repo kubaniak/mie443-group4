@@ -72,8 +72,12 @@ int main(int argc, char** argv) {
 
     std::ofstream outfile("contest2_output.txt");
     if (!outfile.is_open()) {
-        RCLCPP_WARN(node->get_logger(), "Could not open contest2_output.txt for writing");
+        RCLCPP_ERROR(node->get_logger(), "Could not open contest2_output.txt for writing");
+        return -1; // Comment this out to override and continue without writing output
     }
+
+    // Enable exceptions for write errors (e.g. disk full, permissions)
+    outfile.exceptions(std::ofstream::failbit | std::ofstream::badbit);
 
     // Contest countdown timer
     auto start = std::chrono::system_clock::now();
