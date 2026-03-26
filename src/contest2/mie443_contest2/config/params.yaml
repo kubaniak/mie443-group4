@@ -1,0 +1,19 @@
+/contest2:
+  ros__parameters:
+    spin_angular_speed: 0.5
+    spin_total_angle: 6.283185307179586
+    contest_time_limit: 300
+    manipulable_object: "cup"
+    box_offset: 0.7
+    min_detection_confidence: 0.6
+    pan_speed: 0.08
+    pan_steps: 5
+    pan_step_ms: 900
+    settle_ms: 250
+    closer_offset: 0.3
+    align_desired_distance_x: 0.3
+    align_desired_distance_y: 0.0
+    align_kP_linear: 0.5
+    align_kP_angular: 1.0
+    align_dist_tolerance: 0.05
+    align_angle_tolerance: 0.05

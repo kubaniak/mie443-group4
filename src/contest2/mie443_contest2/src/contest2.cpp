@@ -42,7 +42,28 @@ int main(int argc, char** argv) {
         }
     }
 
+
     RCLCPP_INFO(node->get_logger(), "Contest 2 node started");
+
+    // Declare ROS 2 parameters
+    node->declare_parameter<double>("spin_angular_speed", 0.5);
+    node->declare_parameter<double>("spin_total_angle", 2.0 * M_PI);
+    node->declare_parameter<int>("contest_time_limit", 300);
+    node->declare_parameter<std::string>("manipulable_object", "cup");
+    node->declare_parameter<double>("box_offset", 0.7);
+    node->declare_parameter<double>("min_detection_confidence", 0.6);
+    node->declare_parameter<double>("pan_speed", 0.08);
+    node->declare_parameter<int>("pan_steps", 5);
+    node->declare_parameter<int>("pan_step_ms", 900);
+    node->declare_parameter<int>("settle_ms", 250);
+    node->declare_parameter<double>("closer_offset", 0.3);
+    node->declare_parameter<double>("align_desired_distance_x", 0.3);
+    node->declare_parameter<double>("align_desired_distance_y", 0.0);
+    node->declare_parameter<double>("align_kP_linear", 0.5);
+    node->declare_parameter<double>("align_kP_angular", 1.0);
+    node->declare_parameter<double>("align_dist_tolerance", 0.05);
+    node->declare_parameter<double>("align_angle_tolerance", 0.05);
+
 
     // Robot pose object + subscriber
     RobotPose robotPose(0, 0, 0);
@@ -88,8 +109,8 @@ int main(int argc, char** argv) {
     // The TurtleBot4 expects TwistStamped on /cmd_vel.
     {
         // Spin parameters
-        const double angular_speed = 0.5;          // rad/s  (positive = counter-clockwise)
-        const double total_angle   = 2.0 * M_PI;   // one full rotation
+        const double angular_speed = node->get_parameter("spin_angular_speed").as_double();          // rad/s  (positive = counter-clockwise)
+        const double total_angle   = node->get_parameter("spin_total_angle").as_double();   // one full rotation
         const double spin_duration = total_angle / angular_speed;  // seconds
 
         RCLCPP_INFO(node->get_logger(),
@@ -141,7 +162,7 @@ int main(int argc, char** argv) {
     bool object_placed = false;
     int current_box_idx = 0;
     bool return_home = false;
-    std::string manipulable_object = "cup";
+    std::string manipulable_object = node->get_parameter("manipulable_object").as_string();
     bool all_boxes_visited = false;
     bool manipulate = false;
     bool use_nav2_for_tag_align = false;
@@ -149,7 +170,8 @@ int main(int argc, char** argv) {
     RCLCPP_INFO(node->get_logger(), "Starting contest - 300 seconds timer begins now!");
 
     // Execute strategy
-    while(rclcpp::ok() && secondsElapsed <= 300) {
+    int contest_time_limit = node->get_parameter("contest_time_limit").as_int();
+    while(rclcpp::ok() && secondsElapsed <= contest_time_limit) {
         rclcpp::spin_some(node);
 
         // Calculate elapsed time
@@ -210,7 +232,7 @@ int main(int argc, char** argv) {
                 double box_phi = boxes.coords[current_box_idx][2];
 
                 // Configure offset
-                double box_offset = 0.7;
+                double box_offset = node->get_parameter("box_offset").as_double();
 
                 // Adjust the target based on the offset and orientation
                 double target_x = box_x + box_offset * cos(box_phi);
@@ -234,7 +256,7 @@ int main(int argc, char** argv) {
                     // We call getObjectName with true to save the detected image
                     std::string scene_object = yolo.getObjectName(CameraSource::OAKD, true);
                     float confidence = yolo.getConfidence();
-                    const float min_detection_confidence = 0.6f;
+                    const double min_detection_confidence = node->get_parameter("min_detection_confidence").as_double();
 
                     if (!scene_object.empty() && confidence > min_detection_confidence) {
                         RCLCPP_INFO(node->get_logger(), "Detected scene object: %s (%.2f)", scene_object.c_str(), confidence);
@@ -251,10 +273,10 @@ int main(int argc, char** argv) {
                         }
                     } else {
                         RCLCPP_WARN(node->get_logger(), "No scene object detected at box %d. Retrying...", current_box_idx);
-                        const double pan_speed = 0.08;  // rad/s
-                        const int pan_steps = 5;
-                        const int pan_step_ms = 900;
-                        const int settle_ms = 250;
+                        const double pan_speed = node->get_parameter("pan_speed").as_double();  // rad/s
+                        const int pan_steps = node->get_parameter("pan_steps").as_int();
+                        const int pan_step_ms = node->get_parameter("pan_step_ms").as_int();
+                        const int settle_ms = node->get_parameter("settle_ms").as_int();
                         double scan_target_x = target_x;
                         double scan_target_y = target_y;
                         double scan_target_phi = target_phi;
@@ -349,7 +371,7 @@ int main(int argc, char** argv) {
 
                         // If the first scan misses, move closer and run the same panning procedure again.
                         if (!detected_in_scan) {
-                            const double closer_offset = 0.3;
+                            const double closer_offset = node->get_parameter("closer_offset").as_double();
                             scan_target_x = box_x + closer_offset * cos(box_phi);
                             scan_target_y = box_y + closer_offset * sin(box_phi);
                             scan_target_phi = target_phi;
@@ -386,8 +408,8 @@ int main(int argc, char** argv) {
                             RCLCPP_INFO(node->get_logger(), "Tag relative pose: x=%.2f, y=%.2f", tag_x, tag_y);
 
                             // Placeholder values for desired distance and offset from tag
-                            double desired_distance_x = 0.3; // Stop 0.3m in front of the tag
-                            double desired_distance_y = 0.0; // Centered with the tag
+                            double desired_distance_x = node->get_parameter("align_desired_distance_x").as_double(); // Stop 0.3m in front of the tag
+                            double desired_distance_y = node->get_parameter("align_desired_distance_y").as_double(); // Centered with the tag
 
                             double error_x = tag_x - desired_distance_x;
                             double error_y = tag_y - desired_distance_y;
@@ -411,10 +433,10 @@ int main(int argc, char** argv) {
                                 // Variation 2: Use Control Loop
                                 RCLCPP_INFO(node->get_logger(), "Using Control Loop to align with tag...");
 
-                                const double kP_linear = 0.5;
-                                const double kP_angular = 1.0;
-                                const double dist_tolerance = 0.05;
-                                const double angle_tolerance = 0.05;
+                                const double kP_linear = node->get_parameter("align_kP_linear").as_double();
+                                const double kP_angular = node->get_parameter("align_kP_angular").as_double();
+                                const double dist_tolerance = node->get_parameter("align_dist_tolerance").as_double();
+                                const double angle_tolerance = node->get_parameter("align_angle_tolerance").as_double();
 
                                 rclcpp::Rate loop_rate(10); // 10 Hz
                                 auto align_start = std::chrono::system_clock::now();
@@ -573,7 +595,7 @@ int main(int argc, char** argv) {
         outfile.close();
     }
 
-    if (secondsElapsed > 300) {
+    if (secondsElapsed > contest_time_limit) {
         RCLCPP_WARN(node->get_logger(), "Contest time limit reached!");
     }
 

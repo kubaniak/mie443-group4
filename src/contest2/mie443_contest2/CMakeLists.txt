@@ -164,6 +164,8 @@ install(PROGRAMS
 install(DIRECTORY
   boxes_database
   maps
+  config
+  launch
   DESTINATION share/${PROJECT_NAME}
 )
 
