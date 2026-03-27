@@ -19,17 +19,9 @@ int main(int argc, char** argv) {
 
     RCLCPP_INFO(node->get_logger(), "Contest 2 node started");
 
-    // Robot pose object + subscriber
-    RobotPose robotPose(0, 0, 0);
-    auto amclSub = node->create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>(
-        "/amcl_pose",
-        10,
-        std::bind(&RobotPose::poseCallback, &robotPose, std::placeholders::_1)
-    );
-    
     // Initialize YOLO object detector
     AprilTagDetector aprilTagDetector(node);
-    std::vector<int> candidate_tags = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9};
+    std::vector<int> candidate_tags = {0, 1, 2, 3, 4};
 
     // Contest countdown timer
     auto start = std::chrono::system_clock::now();
