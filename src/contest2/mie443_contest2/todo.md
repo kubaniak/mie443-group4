@@ -3,7 +3,7 @@ To preview this file: Ctrl+Shift+V
 ### TODO ON THURSDAY
 - Currently: 
     - (DONE) We implemented a panning scan when an object is not immediately detected.
-    - We navigate and face the objects with an offset of 0.5. This worked quite fine, but it can be tweaked. 
+    - We navigate and face the objects with an offset of 0.7. This worked quite fine, but it can be tweaked.
 - What we want:
     - (DONE) Added panning behavior to turn side to side and retry YOLO detection.
     - Still have a fallback (if it takes more than 30 sec? continue. We missed that object)
@@ -35,4 +35,9 @@ Run colcon build only after in the ros workspace folder (cd ros2_ws)
 
 - Time Management (navigate home when 20s remaining, e.g.)
 
-- We are currently not really using the apriltags to our advantage. Multi-angle detection? Localization, what to do with the robot once we have the apriltag. 
+- We are currently not really using the apriltags to our advantage. Multi-angle detection? Localization, what to do with the robot once we have the apriltag.
+
+### TO EXPERIMENT ON SITE
+- Test the new 0.7m box offset for navigation and facing objects.
+- Evaluate the two new AprilTag alignment variations for bin placement: Nav2 vs. Control Loop (`use_nav2_for_tag_align`).
+- Tune/uncomment exact bin drop position logic (`drop_pose` values in `contest2.cpp`).
