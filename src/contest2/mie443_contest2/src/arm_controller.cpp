@@ -1,6 +1,13 @@
 #include "mie443_contest2/arm_controller.h"
 #include <tf2/LinearMath/Quaternion.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
+#include <algorithm>
+
+namespace {
+constexpr double kGripperMinPosition = -0.174533;
+constexpr double kGripperMaxPosition = 1.74533;
+constexpr double kGripperClosedPosition = -0.17;
+}
 
 ArmController::ArmController(std::shared_ptr<rclcpp::Node> node) : node_(node) {
 	RCLCPP_INFO(node_->get_logger(), "Initializing ArmController...");
@@ -91,11 +98,18 @@ bool ArmController::moveToCartesianPose(double x, double y, double z,
 }
 
 bool ArmController::moveGripper(double position) {
-	RCLCPP_INFO(node_->get_logger(), "Moving gripper to position: %.3f", position);
+	double clamped_position = std::clamp(position, kGripperMinPosition, kGripperMaxPosition);
+	if (clamped_position != position) {
+		RCLCPP_WARN(node_->get_logger(),
+		            "Requested gripper position %.3f is out of range [%.3f, %.3f]. Using %.3f instead.",
+		            position, kGripperMinPosition, kGripperMaxPosition, clamped_position);
+	}
+
+	RCLCPP_INFO(node_->get_logger(), "Moving gripper to position: %.3f", clamped_position);
 
 	try {
 		// Set joint value target for the gripper
-		std::vector<double> joint_values = {position};
+		std::vector<double> joint_values = {clamped_position};
 		gripper_group_->setJointValueTarget(joint_values);
 
 		// Plan and execute
@@ -129,6 +143,6 @@ bool ArmController::openGripper() {
 
 bool ArmController::closeGripper() {
 	RCLCPP_INFO(node_->get_logger(), "Closing gripper...");
-	return moveGripper(0.0);  // Closed position
+	return moveGripper(kGripperClosedPosition);  // Fully closed position near lower joint limit
 }
 
