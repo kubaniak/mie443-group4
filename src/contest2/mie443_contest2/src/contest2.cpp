@@ -13,6 +13,7 @@
 #include <sstream>
 #include <cmath>
 #include <algorithm>
+#include <limits>
 #include <unordered_set>
 #include <vector>
 
@@ -259,6 +260,12 @@ int main(int argc, char** argv) {
         return true;
     };
 
+    auto get_seconds_remaining = [&]() -> uint64_t {
+        auto now = std::chrono::system_clock::now();
+        auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - start).count();
+        return (elapsed >= contest_duration_sec) ? 0 : (contest_duration_sec - elapsed);
+    };
+
     // Try to align with the bin AprilTag from the OAK-D camera frame.
     auto try_align_to_bin_apriltag = [&](int box_idx, int& aligned_tag_id) -> bool {
         const std::vector<int> candidate_tags = {0, 1, 2, 3, 4};
@@ -476,6 +483,28 @@ int main(int argc, char** argv) {
             int active_box_idx = -1;
             bool from_deferred_queue = false;
 
+            auto move_with_time_budget = [&](double goal_x,
+                                             double goal_y,
+                                             double goal_phi,
+                                             const std::string& context_label) -> bool {
+                const uint64_t remaining = get_seconds_remaining();
+                if (remaining <= return_home_buffer_sec + 2) {
+                    RCLCPP_WARN(node->get_logger(),
+                                "Skipping %s: only %lu seconds remain; forcing return-home.",
+                                context_label.c_str(),
+                                remaining);
+                    return_home = true;
+                    all_boxes_visited = true;
+                    return false;
+                }
+
+                const uint64_t available_for_this_goal = remaining - return_home_buffer_sec - 1;
+                const uint64_t timeout_sec = std::max<uint64_t>(1, std::min<uint64_t>(available_for_this_goal, 45));
+                const int timeout_ms = static_cast<int>(timeout_sec * 1000);
+
+                return nav.moveToGoal(goal_x, goal_y, goal_phi, timeout_ms);
+            };
+
             if (current_box_idx < static_cast<int>(boxes.coords.size())) {
                 active_box_idx = current_box_idx;
             } else if (!deferred_boxes.empty()) {
@@ -529,7 +558,7 @@ int main(int argc, char** argv) {
                     }
                 };
 
-                if (nav.moveToGoal(target_x, target_y, target_phi)) {
+                if (move_with_time_budget(target_x, target_y, target_phi, "box approach navigation")) {
                     RCLCPP_INFO(node->get_logger(), "Reached box %d", active_box_idx);
                     nav_attempts_per_box[active_box_idx] = 0;
 
@@ -589,7 +618,14 @@ int main(int argc, char** argv) {
                             bool detected_in_scan = false;
 
                             RCLCPP_INFO(node->get_logger(), "Realigning to target yaw before %s scan retries...", attempt_label.c_str());
-                            if (!nav.moveToGoal(scan_target_x, scan_target_y, scan_target_phi)) {
+                            if (!move_with_time_budget(
+                                    scan_target_x,
+                                    scan_target_y,
+                                    scan_target_phi,
+                                    attempt_label + " yaw realignment")) {
+                                if (return_home) {
+                                    return false;
+                                }
                                 RCLCPP_WARN(node->get_logger(),
                                             "Failed to re-align to target yaw before %s scanning at box %d.",
                                             attempt_label.c_str(), active_box_idx);
@@ -623,7 +659,14 @@ int main(int argc, char** argv) {
 
                                 if (!detected_in_scan) {
                                     RCLCPP_INFO(node->get_logger(), "Re-centering to target yaw after %s scan.", phase.c_str());
-                                    if (!nav.moveToGoal(scan_target_x, scan_target_y, scan_target_phi)) {
+                                    if (!move_with_time_budget(
+                                            scan_target_x,
+                                            scan_target_y,
+                                            scan_target_phi,
+                                            phase + " scan recenter")) {
+                                        if (return_home) {
+                                            return false;
+                                        }
                                         RCLCPP_WARN(node->get_logger(),
                                                     "Failed to re-center after %s scan at box %d.",
                                                     phase.c_str(), active_box_idx);
@@ -654,8 +697,14 @@ int main(int argc, char** argv) {
                                         "Initial panning found nothing at box %d. Moving closer and retrying scan at (%.2f, %.2f, %.2f).",
                                         active_box_idx, scan_target_x, scan_target_y, scan_target_phi);
 
-                            if (nav.moveToGoal(scan_target_x, scan_target_y, scan_target_phi)) {
+                            if (move_with_time_budget(
+                                    scan_target_x,
+                                    scan_target_y,
+                                    scan_target_phi,
+                                    "closer-range scan approach")) {
                                 detected_in_scan = run_panning_scan("closer");
+                            } else if (return_home) {
+                                detected_in_scan = false;
                             } else {
                                 RCLCPP_WARN(node->get_logger(), "Failed to move closer for retry scan at box %d.", active_box_idx);
                             }
@@ -788,7 +837,9 @@ int main(int argc, char** argv) {
         else if (return_home) {
             // 3. Return to Start
             RCLCPP_INFO(node->get_logger(), "Returning to starting location at (%.2f, %.2f, %.2f)", start_x, start_y, start_phi);
-            if (nav.moveToGoal(start_x, start_y, start_phi)) {
+            const uint64_t remaining_for_home = std::max<uint64_t>(get_seconds_remaining(), 10);
+            const uint64_t return_timeout_sec = std::min<uint64_t>(remaining_for_home, 90);
+            if (nav.moveToGoal(start_x, start_y, start_phi, static_cast<int>(return_timeout_sec * 1000))) {
                 RCLCPP_INFO(node->get_logger(), "Successfully returned to the starting location. Mission complete!");
             } else {
                 RCLCPP_ERROR(node->get_logger(), "Failed to return to the starting location!");

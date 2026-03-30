@@ -8,7 +8,7 @@
 class Navigation {
 	public:
 		Navigation(std::shared_ptr<rclcpp::Node> node);
-		bool moveToGoal(double xGoal, double yGoal, double phiGoal);
+		bool moveToGoal(double xGoal, double yGoal, double phiGoal, int timeout_ms = -1);
 
 	private:
 		std::shared_ptr<rclcpp::Node> node_;

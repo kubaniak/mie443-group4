@@ -37,9 +37,11 @@ Run colcon build only after in the ros workspace folder (cd ros2_ws)
     - run `source contest2/bin/activate`
     - run `ros2 launch lerobot_moveit so101_turtlebot.launch.py`
 5. run `ros2 launch lerobot_moveit so101_laptop.launch.py`
-6. Put the robot in the contest space. Run `ros2 launch turtlebot4_navigation localization.launch.py map:=/home/turtlebot/ros2_ws/src/contest2/mie443_contest2/maps/Contest2MapPractice.yaml`. WAIT FOR STARTUP
+6. Put the robot in the contest space. Run 
+`ros2 launch turtlebot4_navigation localization.launch.py map:=/home/turtlebot/ros2_ws/src/contest2/mie443_contest2/maps/Contest2MapPractice.yaml`. 
+WAIT FOR STARTUP
 7. Run `ros2 launch turtlebot4_viz view_navigation.launch.py`, wait a little, then set the initial pose in rviz. 
-8. Run `ros2 launch turtlebot4_navigation nav2.launch.py`, wait for it to finish launching
+8. Run `ros2 launch turtlebot4_navigation nav2.launch.py`, wait for it to finish launching (long time, look for blue text)
 9. Run `ros2 run mie443_contest2 contest2`
 
 ### Other TODOs if time:

@@ -1,6 +1,7 @@
 #include "mie443_contest2/navigation.h"
 #include <tf2/LinearMath/Quaternion.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
+#include <chrono>
 
 using NavigateToPose = nav2_msgs::action::NavigateToPose;
 using GoalHandleNavigateToPose = rclcpp_action::ClientGoalHandle<NavigateToPose>;
@@ -17,7 +18,7 @@ Navigation::Navigation(std::shared_ptr<rclcpp::Node> node) : node_(node) {
 	}
 }
 
-bool Navigation::moveToGoal(double xGoal, double yGoal, double phiGoal) {
+bool Navigation::moveToGoal(double xGoal, double yGoal, double phiGoal, int timeout_ms) {
 	// Check if action server is available
 	if (!action_client_->action_server_is_ready()) {
 		RCLCPP_ERROR(node_->get_logger(), "Action server not available");
@@ -70,10 +71,41 @@ bool Navigation::moveToGoal(double xGoal, double yGoal, double phiGoal) {
 	// Wait for result
 	auto result_future = action_client_->async_get_result(goal_handle);
 
-	if (rclcpp::spin_until_future_complete(node_, result_future) !=
-		rclcpp::FutureReturnCode::SUCCESS) {
-		RCLCPP_ERROR(node_->get_logger(), "Failed to get result");
-		return false;
+	if (timeout_ms > 0) {
+		auto start_time = std::chrono::steady_clock::now();
+		const auto poll_interval = std::chrono::milliseconds(200);
+
+		while (rclcpp::ok()) {
+			auto wait_code = rclcpp::spin_until_future_complete(node_, result_future, poll_interval);
+			if (wait_code == rclcpp::FutureReturnCode::SUCCESS) {
+				break;
+			}
+			if (wait_code == rclcpp::FutureReturnCode::INTERRUPTED) {
+				RCLCPP_ERROR(node_->get_logger(), "Nav2 goal wait interrupted");
+				return false;
+			}
+
+			auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+				std::chrono::steady_clock::now() - start_time);
+			if (elapsed_ms.count() >= timeout_ms) {
+				RCLCPP_WARN(node_->get_logger(),
+					"Navigation goal timed out after %d ms. Canceling goal.",
+					timeout_ms);
+
+				auto cancel_future = action_client_->async_cancel_goal(goal_handle);
+				auto cancel_code = rclcpp::spin_until_future_complete(node_, cancel_future, std::chrono::seconds(2));
+				if (cancel_code != rclcpp::FutureReturnCode::SUCCESS) {
+					RCLCPP_WARN(node_->get_logger(), "Failed to confirm goal cancellation after timeout");
+				}
+				return false;
+			}
+		}
+	} else {
+		if (rclcpp::spin_until_future_complete(node_, result_future) !=
+			rclcpp::FutureReturnCode::SUCCESS) {
+			RCLCPP_ERROR(node_->get_logger(), "Failed to get result");
+			return false;
+		}
 	}
 
 	auto result = result_future.get();
