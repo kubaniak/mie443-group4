@@ -272,15 +272,23 @@ int main(int argc, char** argv) {
             const int total_yolo_attempts = 5;
             for (int attempt = 1; attempt <= total_yolo_attempts; ++attempt) {
                 if (attempt > 1) {
-                    std::this_thread::sleep_for(std::chrono::seconds(2));
+                    RCLCPP_INFO(node->get_logger(), "Waiting 2 seconds for the next YOLO frame...");
+                    
+                    // --- NON-BLOCKING WAIT LOGIC ---
+                    auto wait_start = node->get_clock()->now();
+                    // Loop for 2 seconds while actively processing ROS callbacks
+                    while (rclcpp::ok() && (node->get_clock()->now() - wait_start).seconds() < 2.0) {
+                        rclcpp::spin_some(node); // Process incoming camera/YOLO messages!
+                        std::this_thread::sleep_for(std::chrono::milliseconds(50)); // Prevent CPU pegging
+                    }
                 }
-
                 RCLCPP_INFO(node->get_logger(),
-                            "Attempting YOLO (WRIST Camera) detection %d/%d at %lu seconds",
+                            "Attempting YOLO (OAKD Camera) detection %d/%d at %lu seconds",
                             attempt,
                             total_yolo_attempts,
                             secondsElapsed);
-                std::string detected = yolo.getObjectName(CameraSource::WRIST, true);
+                
+                std::string detected = yolo.getObjectName(CameraSource::OAKD, true);
 
                 if (!detected.empty()) {
                     float confidence = yolo.getConfidence();
