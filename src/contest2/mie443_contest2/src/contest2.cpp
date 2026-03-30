@@ -26,7 +26,7 @@ int main(int argc, char** argv) {
     RCLCPP_INFO(node->get_logger(), "Contest 2 node started");
 
     auto vel_pub = node->create_publisher<geometry_msgs::msg::TwistStamped>("/cmd_vel", 10);
-
+    ArmController arm(node);
     // Initialize AprilTag detector in camera optical frame (camera -> tag transform).
     AprilTagDetector aprilTagDetector(node);
     aprilTagDetector.setReferenceFrame("oakd_rgb_camera_optical_frame");
@@ -120,6 +120,9 @@ int main(int argc, char** argv) {
 
     if (aligned_to_tag) {
         RCLCPP_INFO(node->get_logger(), "AprilTag alignment complete.");
+        arm.moveToCartesianPose(0.023, -0.277, 0.246, 
+                            -0.464, -0.474, -0.529, 0.529);
+        arm.openGripper();
     }
 
     if (secondsElapsed > 300) {
