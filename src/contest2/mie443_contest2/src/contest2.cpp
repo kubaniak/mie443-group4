@@ -12,6 +12,7 @@
 #include <fstream>
 #include <sstream>
 #include <cmath>
+#include <algorithm>
 #include <unordered_set>
 #include <vector>
 
@@ -80,6 +81,8 @@ int main(int argc, char** argv) {
     // Contest countdown timer
     auto start = std::chrono::system_clock::now();
     uint64_t secondsElapsed = 0;
+    const uint64_t contest_duration_sec = 300;
+    const uint64_t return_home_buffer_sec = 20;
 
 
 
@@ -145,7 +148,19 @@ int main(int argc, char** argv) {
     bool return_home = false;
     std::string manipulable_object = "cup";
     bool all_boxes_visited = false;
-    bool manipulate = true;
+    const int max_nav_attempts_per_box = 3;
+    const int max_detection_attempts_per_box = 2;
+    const int max_apriltag_alignment_failures_per_box = 2;
+    std::vector<int> nav_attempts_per_box(boxes.coords.size(), 0);
+    std::vector<int> detection_attempts_per_box(boxes.coords.size(), 0);
+    std::vector<int> apriltag_alignment_failures_per_box(boxes.coords.size(), 0);
+    std::vector<int> deferred_boxes;
+    std::vector<bool> box_is_deferred(boxes.coords.size(), false);
+    std::vector<bool> box_is_finalized(boxes.coords.size(), false);
+
+    // Desired camera->tag alignment setpoints.
+    const double target_tag_x = node->declare_parameter<double>("target_x", -0.009);
+    const double target_tag_z = node->declare_parameter<double>("target_z", 0.196);
 
     // OAK-D scene objects are single-use: once detected confidently, we stop looking for that class.
     const std::vector<std::string> scene_class_order = {
@@ -170,7 +185,22 @@ int main(int argc, char** argv) {
         return first ? "none" : oss.str();
     };
 
-    auto process_scene_detection = [&](const std::string& scene_object,
+    auto format_deferred_boxes = [&]() -> std::string {
+        if (deferred_boxes.empty()) {
+            return "none";
+        }
+        std::ostringstream oss;
+        for (size_t i = 0; i < deferred_boxes.size(); ++i) {
+            if (i > 0) {
+                oss << ",";
+            }
+            oss << deferred_boxes[i];
+        }
+        return oss.str();
+    };
+
+    auto process_scene_detection = [&](int box_idx,
+                                       const std::string& scene_object,
                                        float confidence,
                                        const std::string& context_label,
                                        double log_x,
@@ -181,12 +211,19 @@ int main(int argc, char** argv) {
             return false;
         }
 
-        if (remaining_scene_objects.find(scene_object) == remaining_scene_objects.end()) {
+        const bool already_checked_off =
+            (remaining_scene_objects.find(scene_object) == remaining_scene_objects.end());
+        const bool needs_manipulable_retry =
+            (scene_object == manipulable_object && !object_placed);
+
+        // Keep duplicate suppression for scene scoring, but still allow cup
+        // detections to trigger placement retries until the cup is placed.
+        if (already_checked_off && !needs_manipulable_retry) {
             RCLCPP_INFO(node->get_logger(),
                         "Ignoring already checked-off object '%s' (%.2f) during %s.",
                         scene_object.c_str(), confidence, context_label.c_str());
             // if (outfile.is_open()) {
-            //     outfile << "Box " << current_box_idx << " at ("
+            //     outfile << "Box " << box_idx << " at ("
             //             << log_x << ", " << log_y << ", " << log_phi << "): "
             //             << "IGNORED checked-off object " << scene_object
             //             << " (confidence: " << confidence << ", " << context_label << ")" << std::endl;
@@ -194,38 +231,167 @@ int main(int argc, char** argv) {
             return false;
         }
 
-        remaining_scene_objects.erase(scene_object);
-        RCLCPP_INFO(node->get_logger(),
-                    "Detected new scene object: %s (%.2f) during %s. Remaining: [%s]",
-                    scene_object.c_str(), confidence, context_label.c_str(),
-                    format_remaining_scene_objects().c_str());
+        if (!already_checked_off) {
+            remaining_scene_objects.erase(scene_object);
+            RCLCPP_INFO(node->get_logger(),
+                        "Detected new scene object: %s (%.2f) during %s. Remaining: [%s]",
+                        scene_object.c_str(), confidence, context_label.c_str(),
+                        format_remaining_scene_objects().c_str());
 
-        if (outfile.is_open()) {
-            outfile << "Box " << current_box_idx << " at ("
-                    << log_x << ", " << log_y << ", " << log_phi << "): "
-                    << scene_object << " (confidence: " << confidence << ", " << context_label << ")"
-                    << std::endl;
-            // outfile << "CHECKED_OFF: " << scene_object
-            //         << " | Remaining: [" << format_remaining_scene_objects() << "]" << std::endl;
+            if (outfile.is_open()) {
+                outfile << "Box " << box_idx << " at ("
+                        << log_x << ", " << log_y << ", " << log_phi << "): "
+                        << scene_object << " (confidence: " << confidence << ", " << context_label << ")"
+                        << std::endl;
+                // outfile << "CHECKED_OFF: " << scene_object
+                //         << " | Remaining: [" << format_remaining_scene_objects() << "]" << std::endl;
+            }
+        } else if (needs_manipulable_retry) {
+            RCLCPP_INFO(node->get_logger(),
+                        "Re-detected manipulable object '%s' (%.2f) during %s for placement retry.",
+                        scene_object.c_str(), confidence, context_label.c_str());
         }
 
         if (scene_object == manipulable_object && !object_placed) {
-            manipulate = true;
             RCLCPP_INFO(node->get_logger(), "Manipulable object '%s' detected! Will attempt to place in bin at box %d.",
-                        manipulable_object.c_str(), current_box_idx);
+                        manipulable_object.c_str(), box_idx);
         }
         return true;
+    };
+
+    // Try to align with the bin AprilTag from the OAK-D camera frame.
+    auto try_align_to_bin_apriltag = [&](int box_idx, int& aligned_tag_id) -> bool {
+        const std::vector<int> candidate_tags = {0, 1, 2, 3, 4};
+        const int max_alignment_iters = 40;
+        const int control_period_ms = 100;
+        const int stable_cycles_required = 3;
+
+        const double k_angular = 1.8;
+        const double k_linear = 0.8;
+        const double max_angular = 0.7;
+        const double max_linear = 0.2;
+        const double x_tolerance = 0.015;
+        const double z_tolerance = 0.03;
+
+        bool observed_valid_transform = false;
+        int stable_cycles = 0;
+        aligned_tag_id = -1;
+
+        apriltag.setReferenceFrame("oakd_rgb_camera_optical_frame");
+
+        for (int iter = 0; iter < max_alignment_iters && rclcpp::ok(); ++iter) {
+            std::vector<int> visible_tags = apriltag.getVisibleTags(candidate_tags, 50);
+            if (!visible_tags.empty()) {
+                aligned_tag_id = visible_tags.front();
+            }
+
+            geometry_msgs::msg::TwistStamped cmd_vel;
+            cmd_vel.header.stamp = node->now();
+            cmd_vel.header.frame_id = "base_link";
+            cmd_vel.twist.linear.x = 0.0;
+            cmd_vel.twist.angular.z = 0.0;
+
+            if (aligned_tag_id < 0) {
+                // Slowly rotate in place until at least one candidate tag becomes visible.
+                cmd_vel.twist.angular.z = 0.2;
+                vel_pub->publish(cmd_vel);
+                stable_cycles = 0;
+                rclcpp::spin_some(node);
+                std::this_thread::sleep_for(std::chrono::milliseconds(control_period_ms));
+                continue;
+            }
+
+            auto tag_tf_opt = apriltag.getTagTransform(aligned_tag_id, 50);
+            if (!tag_tf_opt.has_value()) {
+                cmd_vel.twist.angular.z = 0.15;
+                vel_pub->publish(cmd_vel);
+                stable_cycles = 0;
+                rclcpp::spin_some(node);
+                std::this_thread::sleep_for(std::chrono::milliseconds(control_period_ms));
+                continue;
+            }
+
+            observed_valid_transform = true;
+
+            const auto & t = tag_tf_opt->transform.translation;
+            const double x_error = t.x - target_tag_x;
+            const double z_error = t.z - target_tag_z;
+
+            // In camera optical frame, +x means tag appears to the right.
+            cmd_vel.twist.angular.z = std::clamp(-k_angular * x_error, -max_angular, max_angular);
+            cmd_vel.twist.linear.x = std::clamp(k_linear * z_error, -max_linear, max_linear);
+            vel_pub->publish(cmd_vel);
+
+            if (std::abs(x_error) < x_tolerance && std::abs(z_error) < z_tolerance) {
+                stable_cycles += 1;
+                if (stable_cycles >= stable_cycles_required) {
+                    geometry_msgs::msg::TwistStamped stop_cmd;
+                    stop_cmd.header.stamp = node->now();
+                    stop_cmd.header.frame_id = "base_link";
+                    vel_pub->publish(stop_cmd);
+
+                    RCLCPP_INFO(node->get_logger(),
+                                "Aligned to AprilTag %d at box %d (x_error=%.3f, z_error=%.3f)",
+                                aligned_tag_id, box_idx, x_error, z_error);
+                    return true;
+                }
+            } else {
+                stable_cycles = 0;
+            }
+
+            rclcpp::spin_some(node);
+            std::this_thread::sleep_for(std::chrono::milliseconds(control_period_ms));
+        }
+
+        geometry_msgs::msg::TwistStamped stop_cmd;
+        stop_cmd.header.stamp = node->now();
+        stop_cmd.header.frame_id = "base_link";
+        vel_pub->publish(stop_cmd);
+
+        if (!observed_valid_transform) {
+            RCLCPP_WARN(node->get_logger(),
+                        "AprilTag alignment failed at box %d: no valid tag transform observed before timeout.",
+                        box_idx);
+        } else {
+            RCLCPP_WARN(node->get_logger(),
+                        "AprilTag alignment failed at box %d: transform seen but convergence tolerance not met before timeout.",
+                        box_idx);
+        }
+        return false;
     };
 
     RCLCPP_INFO(node->get_logger(), "Starting contest - 300 seconds timer begins now!");
 
     // Execute strategy
-    while(rclcpp::ok() && secondsElapsed <= 300) {
+    while(rclcpp::ok() && secondsElapsed <= contest_duration_sec) {
         rclcpp::spin_some(node);
 
         // Calculate elapsed time
         auto now = std::chrono::system_clock::now();
         secondsElapsed = std::chrono::duration_cast<std::chrono::seconds>(now - start).count();
+        const uint64_t seconds_remaining =
+            (secondsElapsed >= contest_duration_sec) ? 0 : (contest_duration_sec - secondsElapsed);
+        static uint64_t last_status_log_second = std::numeric_limits<uint64_t>::max();
+
+        if (secondsElapsed != last_status_log_second) {
+            last_status_log_second = secondsElapsed;
+            RCLCPP_INFO(node->get_logger(),
+                        "Status: t=%lus remaining=%lus primary_idx=%d deferred=[%s] return_home=%s placed=%s",
+                        secondsElapsed,
+                        seconds_remaining,
+                        current_box_idx,
+                        format_deferred_boxes().c_str(),
+                        return_home ? "true" : "false",
+                        object_placed ? "true" : "false");
+        }
+
+        if (!return_home && seconds_remaining <= return_home_buffer_sec) {
+            RCLCPP_WARN(node->get_logger(),
+                        "%lu seconds remaining. Stopping box search and returning home now.",
+                        seconds_remaining);
+            return_home = true;
+            all_boxes_visited = true;
+        }
         
         // // TEST CODE FOR YOLO DETECTION
         // static uint64_t lastYoloTime = 0;
@@ -243,7 +409,7 @@ int main(int argc, char** argv) {
         // }
 
         /***YOUR CODE HERE***/
-        if (!pickup_done) {
+        if (!pickup_done && !return_home) {
             // 1. Detection and Pickup
             
             arm.openGripper();
@@ -272,15 +438,23 @@ int main(int argc, char** argv) {
             const int total_yolo_attempts = 5;
             for (int attempt = 1; attempt <= total_yolo_attempts; ++attempt) {
                 if (attempt > 1) {
-                    std::this_thread::sleep_for(std::chrono::seconds(2));
+                    RCLCPP_INFO(node->get_logger(), "Waiting 2 seconds for the next YOLO frame...");
+                    
+                    // --- NON-BLOCKING WAIT LOGIC ---
+                    auto wait_start = node->get_clock()->now();
+                    // Loop for 2 seconds while actively processing ROS callbacks
+                    while (rclcpp::ok() && (node->get_clock()->now() - wait_start).seconds() < 2.0) {
+                        rclcpp::spin_some(node); // Process incoming camera/YOLO messages!
+                        std::this_thread::sleep_for(std::chrono::milliseconds(50)); // Prevent CPU pegging
+                    }
                 }
-
                 RCLCPP_INFO(node->get_logger(),
-                            "Attempting YOLO (WRIST Camera) detection %d/%d at %lu seconds",
+                            "Attempting YOLO (OAKD Camera) detection %d/%d at %lu seconds",
                             attempt,
                             total_yolo_attempts,
                             secondsElapsed);
-                std::string detected = yolo.getObjectName(CameraSource::WRIST, true);
+                
+                std::string detected = yolo.getObjectName(CameraSource::OAKD, true);
 
                 if (!detected.empty()) {
                     float confidence = yolo.getConfidence();
@@ -299,10 +473,23 @@ int main(int argc, char** argv) {
 
         } else if (!all_boxes_visited && !return_home) {
             // 2. Navigation, Identification, and Placement
-            if (current_box_idx < boxes.coords.size()) {
-                double box_x = boxes.coords[current_box_idx][0];
-                double box_y = boxes.coords[current_box_idx][1];
-                double box_phi = boxes.coords[current_box_idx][2];
+            int active_box_idx = -1;
+            bool from_deferred_queue = false;
+
+            if (current_box_idx < static_cast<int>(boxes.coords.size())) {
+                active_box_idx = current_box_idx;
+            } else if (!deferred_boxes.empty()) {
+                active_box_idx = deferred_boxes.front();
+                deferred_boxes.erase(deferred_boxes.begin());
+                box_is_deferred[active_box_idx] = false;
+                from_deferred_queue = true;
+                RCLCPP_INFO(node->get_logger(), "Revisiting deferred box %d", active_box_idx);
+            }
+
+            if (active_box_idx >= 0) {
+                double box_x = boxes.coords[active_box_idx][0];
+                double box_y = boxes.coords[active_box_idx][1];
+                double box_phi = boxes.coords[active_box_idx][2];
 
                 // Configure offset
                 double box_offset = 0.7;
@@ -320,32 +507,51 @@ int main(int argc, char** argv) {
                 }
 
                 RCLCPP_INFO(node->get_logger(), "Navigating to offset of box %d at (%.2f, %.2f, %.2f)",
-                            current_box_idx, target_x, target_y, target_phi);
+                            active_box_idx, target_x, target_y, target_phi);
 
                 // Keep latest detection available for optional manipulation logic below.
                 std::string scene_object;
                 float confidence = 0.0f;
                 const float min_detection_confidence = 0.6f;
+                bool detected_scene_object = false;
+                bool finalize_box = false;
+                bool defer_box = false;
+
+                auto schedule_deferred_visit = [&](int box_idx, const std::string& reason) {
+                    if (!box_is_deferred[box_idx] && !box_is_finalized[box_idx]) {
+                        deferred_boxes.push_back(box_idx);
+                        box_is_deferred[box_idx] = true;
+                        RCLCPP_WARN(node->get_logger(),
+                                    "Deferring box %d for revisit (%s). Deferred queue size: %zu",
+                                    box_idx,
+                                    reason.c_str(),
+                                    deferred_boxes.size());
+                    }
+                };
 
                 if (nav.moveToGoal(target_x, target_y, target_phi)) {
-                    RCLCPP_INFO(node->get_logger(), "Reached box %d", current_box_idx);
+                    RCLCPP_INFO(node->get_logger(), "Reached box %d", active_box_idx);
+                    nav_attempts_per_box[active_box_idx] = 0;
 
                     // Detect scene object
                     // We call getObjectName with true to save the detected image
                     scene_object = yolo.getObjectName(CameraSource::OAKD, true);
                     confidence = yolo.getConfidence();
 
-                    if (!process_scene_detection(
-                            scene_object,
-                            confidence,
-                            "initial view",
-                            target_x,
-                            target_y,
-                            target_phi,
-                            min_detection_confidence)) {
+                    detected_scene_object = process_scene_detection(
+                        active_box_idx,
+                        scene_object,
+                        confidence,
+                        "initial view",
+                        target_x,
+                        target_y,
+                        target_phi,
+                        min_detection_confidence);
+
+                    if (!detected_scene_object) {
                         RCLCPP_WARN(node->get_logger(),
-                                    "No usable scene object detected at box %d. Retrying...",
-                                    current_box_idx);
+                                    "No usable scene object detected at box %d. Running local scan.",
+                                    active_box_idx);
                         const double pan_speed = 0.08;  // rad/s
                         const int pan_steps = 5;
                         const int pan_step_ms = 900;
@@ -364,6 +570,7 @@ int main(int argc, char** argv) {
                                 const std::string attempt_context =
                                     attempt_label + " " + phase + " step " + std::to_string(step_idx);
                                 if (process_scene_detection(
+                                        active_box_idx,
                                         scene_object,
                                         confidence,
                                         attempt_context,
@@ -375,13 +582,7 @@ int main(int argc, char** argv) {
                                 }
 
                                 RCLCPP_WARN(node->get_logger(), "No usable scene object detected at box %d during %s %s step %d.",
-                                            current_box_idx, attempt_label.c_str(), phase.c_str(), step_idx);
-                                // if (outfile.is_open()) {
-                                //     outfile << "Box " << current_box_idx << " at ("
-                                //             << scan_target_x << ", " << scan_target_y << ", " << scan_target_phi << "): "
-                                //             << "None usable detected (" << attempt_label << " " << phase
-                                //             << " step " << step_idx << ")" << std::endl;
-                                // }
+                                            active_box_idx, attempt_label.c_str(), phase.c_str(), step_idx);
                                 return false;
                             };
 
@@ -391,7 +592,7 @@ int main(int argc, char** argv) {
                             if (!nav.moveToGoal(scan_target_x, scan_target_y, scan_target_phi)) {
                                 RCLCPP_WARN(node->get_logger(),
                                             "Failed to re-align to target yaw before %s scanning at box %d.",
-                                            attempt_label.c_str(), current_box_idx);
+                                            attempt_label.c_str(), active_box_idx);
                             }
 
                             // Try once from centered view before panning.
@@ -425,7 +626,7 @@ int main(int argc, char** argv) {
                                     if (!nav.moveToGoal(scan_target_x, scan_target_y, scan_target_phi)) {
                                         RCLCPP_WARN(node->get_logger(),
                                                     "Failed to re-center after %s scan at box %d.",
-                                                    phase.c_str(), current_box_idx);
+                                                    phase.c_str(), active_box_idx);
                                     }
                                 }
                             }
@@ -451,115 +652,65 @@ int main(int argc, char** argv) {
 
                             RCLCPP_INFO(node->get_logger(),
                                         "Initial panning found nothing at box %d. Moving closer and retrying scan at (%.2f, %.2f, %.2f).",
-                                        current_box_idx, scan_target_x, scan_target_y, scan_target_phi);
+                                        active_box_idx, scan_target_x, scan_target_y, scan_target_phi);
 
                             if (nav.moveToGoal(scan_target_x, scan_target_y, scan_target_phi)) {
                                 detected_in_scan = run_panning_scan("closer");
                             } else {
-                                RCLCPP_WARN(node->get_logger(), "Failed to move closer for retry scan at box %d.", current_box_idx);
+                                RCLCPP_WARN(node->get_logger(), "Failed to move closer for retry scan at box %d.", active_box_idx);
                             }
+                        }
+
+                        detected_scene_object = detected_in_scan;
+                    }
+
+                    if (detected_scene_object) {
+                        detection_attempts_per_box[active_box_idx] = 0;
+                        finalize_box = true;
+                    } else {
+                        detection_attempts_per_box[active_box_idx] += 1;
+                        if (detection_attempts_per_box[active_box_idx] >= max_detection_attempts_per_box) {
+                            RCLCPP_ERROR(node->get_logger(),
+                                         "Box %d had no usable detection after %d full attempts. Marking unresolved and moving on.",
+                                         active_box_idx,
+                                         detection_attempts_per_box[active_box_idx]);
+                            finalize_box = true;
+                        } else {
+                            defer_box = true;
                         }
                     }
                 } else {
-                    RCLCPP_ERROR(node->get_logger(), "Failed to navigate to box %d", current_box_idx);
-                }
-                if (manipulate) {
-                    RCLCPP_INFO(node->get_logger(), "Cup detected, Attempting to place the manipulable object in the bin at box %d", current_box_idx);
-
-                    // Look for AprilTags for the bin
-                    std::vector<int> candidate_tags = {0, 1, 2, 3, 4};
-                    std::vector<int> visible_tags = apriltag.getVisibleTags(candidate_tags, 50);
-                    apriltag.setReferenceFrame("oakd_rgb_camera_optical_frame");
-                    
-                    // Desired camera->tag alignment.
-                    geometry_msgs::msg::Vector3 t_des;
-                    t_des.x = node->declare_parameter<double>("target_x", -0.009);
-                    t_des.y = node->declare_parameter<double>("target_y", 0.034);
-                    t_des.z = node->declare_parameter<double>("target_z", 0.196);
-
-                    geometry_msgs::msg::Quaternion q_des;
-                    q_des.x = node->declare_parameter<double>("target_qx", 1.000);
-                    q_des.y = node->declare_parameter<double>("target_qy", 0.008);
-                    q_des.z = node->declare_parameter<double>("target_qz", 0.015);
-                    q_des.w = node->declare_parameter<double>("target_qw", -0.002);
-
-                    bool aligned_to_tag = false;
-                    int aligned_tag_id = -1;
-
-                    if (!visible_tags.empty()) {
-                        RCLCPP_INFO(node->get_logger(), "Found bin with AprilTag ID: %d. Aligning with tag...", visible_tags[0]);
-
-                        auto tag_pose_opt = apriltag.getTagPose(visible_tags[0]);
-                        if (tag_pose_opt.has_value()) {
-                            // Implement tag alignment here
-                            geometry_msgs::msg::TwistStamped cmd_vel;
-                            cmd_vel.header.stamp = node->now();
-                            cmd_vel.header.frame_id = "base_link";
-
-                            // if (visible_tags.empty()) { 
-                            //     // Drive in a small circle while searching for a tag.
-                            //     cmd_vel.twist.linear.x = 0.06;
-                            //     cmd_vel.twist.angular.z = 0.28;
-                            //     vel_pub->publish(cmd_vel);
-                            //     std::this_thread::sleep_for(std::chrono::milliseconds(100));
-                            //     continue;
-                            // }
-
-                            int tag_id = visible_tags.front();
-                            auto tag_tf_opt = apriltag.getTagTransform(tag_id, 50);
-                            if (!tag_tf_opt.has_value()) {
-                                std::this_thread::sleep_for(std::chrono::milliseconds(100));
-                                continue;
-                            }
-
-                            const auto & t = tag_tf_opt->transform.translation;
-                            const double x_error = t.x - t_des.x;  // Horizontal tag offset in camera frame.
-                            const double z_error = t.z - t_des.z;  // Forward distance error.
-
-                            const double k_angular = 1.8;
-                            const double k_linear = 0.8;
-                            const double max_angular = 0.7;
-                            const double max_linear = 0.2;
-                            const double x_tolerance = 0.015;
-                            const double z_tolerance = 0.03;
-
-                            // In camera optical frame, +x means tag appears to the right.
-                            cmd_vel.twist.angular.z = std::clamp(-k_angular * x_error, -max_angular, max_angular);
-                            cmd_vel.twist.linear.x = std::clamp(k_linear * z_error, -max_linear, max_linear);
-
-                            vel_pub->publish(cmd_vel);
-
-                            if (std::abs(x_error) < x_tolerance && std::abs(z_error) < z_tolerance) {
-                                aligned_to_tag = true;
-                                aligned_tag_id = tag_id;
-
-                                geometry_msgs::msg::TwistStamped stop_cmd;
-                                stop_cmd.header.stamp = node->now();
-                                stop_cmd.header.frame_id = "base_link";
-                                vel_pub->publish(stop_cmd);
-
-                                RCLCPP_INFO(node->get_logger(),
-                                            "Aligned to AprilTag %d (x_error=%.3f, z_error=%.3f)",
-                                            aligned_tag_id, x_error, z_error);
-                            } else {
-                                RCLCPP_INFO(node->get_logger(),
-                                            "Aligning to AprilTag %d: x_error=%.3f, z_error=%.3f",
-                                            tag_id, x_error, z_error);
-                            }
-                                
-                            std::this_thread::sleep_for(std::chrono::milliseconds(100));
-                        } else {
-                            RCLCPP_WARN(node->get_logger(), "Failed to get pose for visible tag %d!", visible_tags[0]);
-                        }
+                    RCLCPP_ERROR(node->get_logger(), "Failed to navigate to box %d", active_box_idx);
+                    nav_attempts_per_box[active_box_idx] += 1;
+                    if (nav_attempts_per_box[active_box_idx] >= max_nav_attempts_per_box) {
+                        RCLCPP_ERROR(node->get_logger(),
+                                     "Box %d navigation failed %d times. Marking unreachable and moving on.",
+                                     active_box_idx,
+                                     nav_attempts_per_box[active_box_idx]);
+                        finalize_box = true;
                     } else {
-                        RCLCPP_WARN(node->get_logger(), "Cup detected but no AprilTag found for the bin at box %d!", current_box_idx);
+                        defer_box = true;
                     }
-                    // Check if it matches the manipulable object, if aligned with apriltag and only place if not placed 
-                    if (scene_object == manipulable_object && !object_placed && aligned_to_tag) {
-                        RCLCPP_INFO(node->get_logger(), "MATCH FOUND! Manipulable object matches scene object.");
-                        
+                }
+
+                if (detected_scene_object && scene_object == manipulable_object && !object_placed) {
+                    RCLCPP_INFO(node->get_logger(),
+                                "Cup detected at box %d. Attempting AprilTag alignment for bin placement.",
+                                active_box_idx);
+
+                    int aligned_tag_id = -1;
+                    bool aligned_to_tag = try_align_to_bin_apriltag(active_box_idx, aligned_tag_id);
+
+                    if (aligned_to_tag) {
+                        apriltag_alignment_failures_per_box[active_box_idx] = 0;
+
+                        RCLCPP_INFO(node->get_logger(),
+                                    "Tag-guided placement at box %d using tag %d.",
+                                    active_box_idx,
+                                    aligned_tag_id);
+
                         // Home Position (also drop position!)
-                        arm.moveToCartesianPose(0.023, -0.277, 0.246, 
+                        arm.moveToCartesianPose(0.023, -0.277, 0.246,
                             -0.464, -0.474, -0.529, 0.529);
 
                         arm.openGripper();
@@ -568,12 +719,57 @@ int main(int argc, char** argv) {
                         // Intermediate safe position (carry position)
                         arm.moveToCartesianPose(0.028, -0.156, 0.243,
                             -0.219, -0.303, -0.721, 0.584);
-                            
-                    } else if (scene_object == manipulable_object && object_placed) {
-                        RCLCPP_INFO(node->get_logger(), "Matched object found again, but already placed the manipulable object.");
+
+                        finalize_box = true;
+                    } else {
+                        apriltag_alignment_failures_per_box[active_box_idx] += 1;
+                        const int alignment_failures = apriltag_alignment_failures_per_box[active_box_idx];
+
+                        if (alignment_failures >= max_apriltag_alignment_failures_per_box) {
+                            RCLCPP_WARN(node->get_logger(),
+                                        "AprilTag alignment failed %d times at cup box %d. Forcing Nav2-only drop.",
+                                        alignment_failures,
+                                        active_box_idx);
+
+                            geometry_msgs::msg::TwistStamped stop_cmd;
+                            stop_cmd.header.stamp = node->now();
+                            stop_cmd.header.frame_id = "base_link";
+                            vel_pub->publish(stop_cmd);
+
+                            // Forced drop fallback after repeated AprilTag failures.
+                            arm.moveToCartesianPose(0.023, -0.277, 0.246,
+                                -0.464, -0.474, -0.529, 0.529);
+
+                            arm.openGripper();
+                            object_placed = true;
+
+                            arm.moveToCartesianPose(0.028, -0.156, 0.243,
+                                -0.219, -0.303, -0.721, 0.584);
+
+                            finalize_box = true;
+                            defer_box = false;
+                        } else {
+                            RCLCPP_WARN(node->get_logger(),
+                                        "AprilTag alignment failed at cup box %d (attempt %d/%d). Deferring one retry.",
+                                        active_box_idx,
+                                        alignment_failures,
+                                        max_apriltag_alignment_failures_per_box);
+                            finalize_box = false;
+                            defer_box = true;
+                        }
                     }
                 }
-                current_box_idx++;
+
+                if (finalize_box) {
+                    box_is_finalized[active_box_idx] = true;
+                    box_is_deferred[active_box_idx] = false;
+                } else if (defer_box) {
+                    schedule_deferred_visit(active_box_idx, "temporary failure");
+                }
+
+                if (!from_deferred_queue) {
+                    current_box_idx++;
+                }
             } else {
                 all_boxes_visited = true;
                 if (!object_placed) {
@@ -607,7 +803,7 @@ int main(int argc, char** argv) {
         outfile.close();
     }
 
-    if (secondsElapsed > 300) {
+    if (secondsElapsed > contest_duration_sec) {
         RCLCPP_WARN(node->get_logger(), "Contest time limit reached!");
     }
 
