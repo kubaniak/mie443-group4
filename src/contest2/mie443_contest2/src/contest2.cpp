@@ -293,8 +293,7 @@ int main(int argc, char** argv) {
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
             // Intermediate safe position (carry position) (CHANGE THIS BECAUSE OAKD STILL DETECTS!!!)
-            arm.moveToCartesianPose(0.028, -0.145, 0.139, 
-                -0.289, -0.407, -0.674, 0.544);
+            arm.moveToCartesianPose(0.028, -0.156, 0.243,-0.219, -0.303, -0.721, 0.584)
 
             pickup_done = true;
 
@@ -478,6 +477,9 @@ int main(int argc, char** argv) {
                         auto tag_pose_opt = apriltag.getTagPose(visible_tags[0]);
                         if (tag_pose_opt.has_value()) {
                             // Implement tag alignment here (TODO)
+                            
+
+
                             aligned_to_tag = true;
                         } else {
                             RCLCPP_WARN(node->get_logger(), "Failed to get pose for visible tag %d!", visible_tags[0]);
@@ -497,8 +499,7 @@ int main(int argc, char** argv) {
                         object_placed = true;
 
                         // Intermediate safe position (carry position) (CHANGE THIS BECAUSE OAKD STILL DETECTS!!!)
-                        arm.moveToCartesianPose(0.028, -0.145, 0.139, 
-                            -0.289, -0.407, -0.674, 0.544);
+                        arm.moveToCartesianPose(0.028, -0.156, 0.243,-0.219, -0.303, -0.721, 0.584)
                             
                     } else if (scene_object == manipulable_object && object_placed) {
                         RCLCPP_INFO(node->get_logger(), "Matched object found again, but already placed the manipulable object.");
