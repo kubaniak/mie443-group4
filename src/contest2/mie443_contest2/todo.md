@@ -2,12 +2,14 @@ To preview this file: Ctrl+Shift+V
 
 ### TODO ON THURSDAY
 - Currently: 
-    - (DONE) We implemented a panning scan when an object is not immediately detected.
+    - (DONE) We implemented a panning scan when an object is not immediately detected (with second scan closer by 0.3m).
     - We navigate and face the objects with an offset of 0.7. This worked quite fine, but it can be tweaked.
 - What we want:
     - (DONE) Added panning behavior to turn side to side and retry YOLO detection.
+    - (DONE) Added fallback behavior where if the initial scan misses, the robot moves 0.3m closer and tries panning again.
     - Still have a fallback (if it takes more than 30 sec? continue. We missed that object)
     - (DONE) outfile is opened once and remains open instead of being overwritten (or use append mode: std::ios_base::app if reopening is needed, though currently it is open the whole time).
+    - (DONE) Implemented single-use detections for scene classes (cup, motorcycle, clock, plant, water bottle) so duplicate boxes aren't re-logged.
 
 
     - Optional: Retry if time remaining, only visiting locations where no object was yolo'd
@@ -41,3 +43,5 @@ Run colcon build only after in the ros workspace folder (cd ros2_ws)
 - Test the new 0.7m box offset for navigation and facing objects.
 - Evaluate the two new AprilTag alignment variations for bin placement: Nav2 vs. Control Loop (`use_nav2_for_tag_align`).
 - Tune/uncomment exact bin drop position logic (`drop_pose` values in `contest2.cpp`).
+- Evaluate checking-off scene classes to make sure we don't skip unvisited boxes after one was detected.
+- Tune the closer offset panning (0.3m) on failure, and double check collision with boxes.
