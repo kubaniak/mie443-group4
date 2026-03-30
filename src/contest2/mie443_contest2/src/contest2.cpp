@@ -67,10 +67,10 @@ int main(int argc, char** argv) {
     }
 
     // Initialize helper objects
-    Navigation nav(node);
-    YoloInterface yolo(node);
+    // Navigation nav(node);
+    // YoloInterface yolo(node);
     ArmController arm(node);
-    AprilTagDetector apriltag(node);
+    // AprilTagDetector apriltag(node);
 
     std::ofstream outfile("src/contest2/mie443_contest2/contest2_output.txt", std::ios_base::app);
     if (!outfile.is_open()) {
@@ -88,50 +88,7 @@ int main(int argc, char** argv) {
 
     // Spin 360 degrees in place so AMCL can converge before we record the start pose.
     // The TurtleBot4 expects TwistStamped on /cmd_vel.
-    {
-        // Spin parameters
-        const double angular_speed = 0.5;          // rad/s  (positive = counter-clockwise)
-        const double total_angle   = 2.0 * M_PI;   // one full rotation
-        const double spin_duration = total_angle / angular_speed;  // seconds
-
-        RCLCPP_INFO(node->get_logger(),
-                     "Spinning 360 degrees in place for AMCL convergence (%.1f s at %.2f rad/s)...",
-                     spin_duration, angular_speed);
-
-        auto spin_start = node->get_clock()->now();
-
-        while (rclcpp::ok()) {
-            rclcpp::spin_some(node);  // process AMCL callbacks while spinning
-
-            double elapsed = (node->get_clock()->now() - spin_start).seconds();
-            if (elapsed >= spin_duration) {
-                break;
-            }
-
-            geometry_msgs::msg::TwistStamped cmd;
-            cmd.header.stamp = node->now();
-            cmd.twist.linear.x = 0.0;
-            cmd.twist.angular.z = angular_speed;
-            vel_pub->publish(cmd);
-
-            std::this_thread::sleep_for(std::chrono::milliseconds(50));
-        }
-
-        // Stop the robot
-        geometry_msgs::msg::TwistStamped stop_cmd;
-        stop_cmd.header.stamp = node->now();
-        stop_cmd.twist.linear.x = 0.0;
-        stop_cmd.twist.angular.z = 0.0;
-        vel_pub->publish(stop_cmd);
-
-        // Let a few more AMCL updates arrive after stopping
-        for (int i = 0; i < 20; ++i) {
-            rclcpp::spin_some(node);
-            std::this_thread::sleep_for(std::chrono::milliseconds(50));
-        }
-
-        RCLCPP_INFO(node->get_logger(), "Spin complete. AMCL should now have a good pose estimate.");
-    }
+   
 
     double start_x = robotPose.x;
     double start_y = robotPose.y;
@@ -221,7 +178,7 @@ int main(int argc, char** argv) {
     RCLCPP_INFO(node->get_logger(), "Starting contest - 300 seconds timer begins now!");
 
     // Execute strategy
-    while(rclcpp::ok() && secondsElapsed <= 300) {
+    while(rclcpp::ok() && secondsElapsed <= 20) {
         rclcpp::spin_some(node);
 
         // Calculate elapsed time
@@ -242,294 +199,13 @@ int main(int argc, char** argv) {
         //         RCLCPP_INFO(node->get_logger(), "YOLO did not detect any objects");
         //     }
         // }
-
-        /***YOUR CODE HERE***/
-        if (!pickup_done) {
-            // 1. Detection and Pickup
-            
-            arm.openGripper();
-            // Position just above the cup
-            arm.moveToCartesianPose(0.142, -0.019, 0.181,
-                -0.016, 0.108, -0.114, 0.987);
-
-            // Move down to grasp the cup
-            arm.moveToCartesianPose(0.126, -0.018, 0.152,
-                0.001, -0.009, -0.110, 0.994);
-
-            arm.closeGripper();
-
-            // Position just above the cup
-            arm.moveToCartesianPose(0.142, -0.019, 0.181,
-                -0.016, 0.108, -0.114, 0.987);
-
-            // Intermediate safe position
-            arm.moveToCartesianPose(0.028, -0.145, 0.139, 
+        
+        // Intermediate safe position (carry position) (CHANGE THIS BECAUSE OAKD STILL DETECTS!!!)
+        arm.moveToCartesianPose(0.028, -0.145, 0.139, 
                 -0.289, -0.407, -0.674, 0.544);
+        arm.moveToCartesianPose(0.028, -0.156, 0.243,-0.219, -0.303, -0.721, 0.584);    /***YOUR CODE HERE***/
+        break;
 
-            // Move to a position where the OAKD camera can see the cup
-            arm.moveToCartesianPose(0.018, -0.311, 0.097, 
-                -0.073, 0.049, 0.544, 0.835);
-
-            const int total_yolo_attempts = 5;
-            for (int attempt = 1; attempt <= total_yolo_attempts; ++attempt) {
-                if (attempt > 1) {
-                    std::this_thread::sleep_for(std::chrono::seconds(2));
-                }
-
-                RCLCPP_INFO(node->get_logger(),
-                            "Attempting YOLO (WRIST Camera) detection %d/%d at %lu seconds",
-                            attempt,
-                            total_yolo_attempts,
-                            secondsElapsed);
-                std::string detected = yolo.getObjectName(CameraSource::WRIST, true);
-
-                if (!detected.empty()) {
-                    float confidence = yolo.getConfidence();
-                    RCLCPP_INFO(node->get_logger(), "YOLO detected: %s with confidence %.2f", detected.c_str(), confidence);
-                } else {
-                    RCLCPP_INFO(node->get_logger(), "YOLO did not detect any objects");
-                }
-            }
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
-
-            // Intermediate safe position (carry position) (CHANGE THIS BECAUSE OAKD STILL DETECTS!!!)
-            arm.moveToCartesianPose(0.028, -0.145, 0.139, 
-                -0.289, -0.407, -0.674, 0.544);
-
-            pickup_done = true;
-
-        } else if (!all_boxes_visited && !return_home) {
-            // 2. Navigation, Identification, and Placement
-            if (current_box_idx < boxes.coords.size()) {
-                double box_x = boxes.coords[current_box_idx][0];
-                double box_y = boxes.coords[current_box_idx][1];
-                double box_phi = boxes.coords[current_box_idx][2];
-
-                // Configure offset
-                double box_offset = 0.7;
-
-                // Adjust the target based on the offset and orientation
-                double target_x = box_x + box_offset * cos(box_phi);
-                double target_y = box_y + box_offset * sin(box_phi);
-                double target_phi = box_phi + M_PI; // Face the box
-
-                // Normalize target_phi to be between -PI and PI
-                if (target_phi > M_PI) {
-                    target_phi -= 2 * M_PI;
-                } else if (target_phi < -M_PI) {
-                    target_phi += 2 * M_PI;
-                }
-
-                RCLCPP_INFO(node->get_logger(), "Navigating to offset of box %d at (%.2f, %.2f, %.2f)",
-                            current_box_idx, target_x, target_y, target_phi);
-
-                // Keep latest detection available for optional manipulation logic below.
-                std::string scene_object;
-                float confidence = 0.0f;
-                const float min_detection_confidence = 0.6f;
-
-                if (nav.moveToGoal(target_x, target_y, target_phi)) {
-                    RCLCPP_INFO(node->get_logger(), "Reached box %d", current_box_idx);
-
-                    // Detect scene object
-                    // We call getObjectName with true to save the detected image
-                    scene_object = yolo.getObjectName(CameraSource::OAKD, true);
-                    confidence = yolo.getConfidence();
-
-                    if (!process_scene_detection(
-                            scene_object,
-                            confidence,
-                            "initial view",
-                            target_x,
-                            target_y,
-                            target_phi,
-                            min_detection_confidence)) {
-                        RCLCPP_WARN(node->get_logger(),
-                                    "No usable scene object detected at box %d. Retrying...",
-                                    current_box_idx);
-                        const double pan_speed = 0.08;  // rad/s
-                        const int pan_steps = 5;
-                        const int pan_step_ms = 900;
-                        const int settle_ms = 250;
-                        double scan_target_x = target_x;
-                        double scan_target_y = target_y;
-                        double scan_target_phi = target_phi;
-
-                        auto run_panning_scan = [&](const std::string& attempt_label) -> bool {
-                            auto try_detection = [&](const std::string& phase, int step_idx) -> bool {
-                                RCLCPP_INFO(node->get_logger(), "%s %s step %d: running YOLO",
-                                            attempt_label.c_str(), phase.c_str(), step_idx);
-                                scene_object = yolo.getObjectName(CameraSource::OAKD, true);
-                                confidence = yolo.getConfidence();
-
-                                const std::string attempt_context =
-                                    attempt_label + " " + phase + " step " + std::to_string(step_idx);
-                                if (process_scene_detection(
-                                        scene_object,
-                                        confidence,
-                                        attempt_context,
-                                        scan_target_x,
-                                        scan_target_y,
-                                        scan_target_phi,
-                                        min_detection_confidence)) {
-                                    return true;
-                                }
-
-                                RCLCPP_WARN(node->get_logger(), "No usable scene object detected at box %d during %s %s step %d.",
-                                            current_box_idx, attempt_label.c_str(), phase.c_str(), step_idx);
-                                if (outfile.is_open()) {
-                                    outfile << "Box " << current_box_idx << " at ("
-                                            << scan_target_x << ", " << scan_target_y << ", " << scan_target_phi << "): "
-                                            << "None usable detected (" << attempt_label << " " << phase
-                                            << " step " << step_idx << ")" << std::endl;
-                                }
-                                return false;
-                            };
-
-                            bool detected_in_scan = false;
-
-                            RCLCPP_INFO(node->get_logger(), "Realigning to target yaw before %s scan retries...", attempt_label.c_str());
-                            if (!nav.moveToGoal(scan_target_x, scan_target_y, scan_target_phi)) {
-                                RCLCPP_WARN(node->get_logger(),
-                                            "Failed to re-align to target yaw before %s scanning at box %d.",
-                                            attempt_label.c_str(), current_box_idx);
-                            }
-
-                            // Try once from centered view before panning.
-                            detected_in_scan = try_detection("center", 0);
-
-                            for (int side = 0; side < 2 && !detected_in_scan; ++side) {
-                                const bool scan_left = (side == 0);
-                                const std::string phase = scan_left ? "left" : "right";
-                                const double direction = scan_left ? 1.0 : -1.0;
-
-                                for (int step = 1; step <= pan_steps && !detected_in_scan; ++step) {
-                                    geometry_msgs::msg::TwistStamped cmd;
-                                    cmd.header.stamp = node->now();
-                                    cmd.twist.linear.x = 0.0;
-                                    cmd.twist.angular.z = direction * pan_speed;
-                                    vel_pub->publish(cmd);
-                                    std::this_thread::sleep_for(std::chrono::milliseconds(pan_step_ms));
-
-                                    geometry_msgs::msg::TwistStamped stop_cmd;
-                                    stop_cmd.header.stamp = node->now();
-                                    stop_cmd.twist.linear.x = 0.0;
-                                    stop_cmd.twist.angular.z = 0.0;
-                                    vel_pub->publish(stop_cmd);
-                                    std::this_thread::sleep_for(std::chrono::milliseconds(settle_ms));
-
-                                    detected_in_scan = try_detection(phase, step);
-                                }
-
-                                if (!detected_in_scan) {
-                                    RCLCPP_INFO(node->get_logger(), "Re-centering to target yaw after %s scan.", phase.c_str());
-                                    if (!nav.moveToGoal(scan_target_x, scan_target_y, scan_target_phi)) {
-                                        RCLCPP_WARN(node->get_logger(),
-                                                    "Failed to re-center after %s scan at box %d.",
-                                                    phase.c_str(), current_box_idx);
-                                    }
-                                }
-                            }
-
-                            // Ensure robot is stopped after scan motions.
-                            geometry_msgs::msg::TwistStamped final_stop_cmd;
-                            final_stop_cmd.header.stamp = node->now();
-                            final_stop_cmd.twist.linear.x = 0.0;
-                            final_stop_cmd.twist.angular.z = 0.0;
-                            vel_pub->publish(final_stop_cmd);
-
-                            return detected_in_scan;
-                        };
-
-                        bool detected_in_scan = run_panning_scan("initial");
-
-                        // If the first scan misses, move closer and run the same panning procedure again.
-                        if (!detected_in_scan) {
-                            const double closer_offset = 0.3;
-                            scan_target_x = box_x + closer_offset * cos(box_phi);
-                            scan_target_y = box_y + closer_offset * sin(box_phi);
-                            scan_target_phi = target_phi;
-
-                            RCLCPP_INFO(node->get_logger(),
-                                        "Initial panning found nothing at box %d. Moving closer and retrying scan at (%.2f, %.2f, %.2f).",
-                                        current_box_idx, scan_target_x, scan_target_y, scan_target_phi);
-
-                            if (nav.moveToGoal(scan_target_x, scan_target_y, scan_target_phi)) {
-                                detected_in_scan = run_panning_scan("closer");
-                            } else {
-                                RCLCPP_WARN(node->get_logger(), "Failed to move closer for retry scan at box %d.", current_box_idx);
-                            }
-                        }
-                    }
-                } else {
-                    RCLCPP_ERROR(node->get_logger(), "Failed to navigate to box %d", current_box_idx);
-                }
-                if (manipulate) {
-                    RCLCPP_INFO(node->get_logger(), "Cup detected, Attempting to place the manipulable object in the bin at box %d", current_box_idx);
-
-                    // Look for AprilTags for the bin
-                    std::vector<int> candidate_tags = {0, 1, 2, 3, 4};
-                    std::vector<int> visible_tags = apriltag.getVisibleTags(candidate_tags, 100);
-                    apriltag.setReferenceFrame("oakd_rgb_camera_optical_frame");
-
-                    if (!visible_tags.empty()) {
-                        RCLCPP_INFO(node->get_logger(), "Found bin with AprilTag ID: %d. Aligning with tag...", visible_tags[0]);
-
-                        auto tag_pose_opt = apriltag.getTagPose(visible_tags[0]);
-                        if (tag_pose_opt.has_value()) {
-                            // Implement tag alignment here (TODO)
-                            aligned_to_tag = true;
-                        } else {
-                            RCLCPP_WARN(node->get_logger(), "Failed to get pose for visible tag %d!", visible_tags[0]);
-                        }
-                    } else {
-                        RCLCPP_WARN(node->get_logger(), "Cup detected but no AprilTag found for the bin at box %d!", current_box_idx);
-                    }
-                    // Check if it matches the manipulable object, if aligned with apriltag (TODO) and only place if not placed 
-                    if (scene_object == manipulable_object && !object_placed) {
-                        RCLCPP_INFO(node->get_logger(), "MATCH FOUND! Manipulable object matches scene object.");
-                        
-                        // Home Position (also drop position!)
-                        arm.moveToCartesianPose(0.023, -0.277, 0.246, 
-                            -0.464, -0.474, -0.529, 0.529);
-
-                        arm.openGripper();
-                        object_placed = true;
-
-                        // Intermediate safe position (carry position) (CHANGE THIS BECAUSE OAKD STILL DETECTS!!!)
-                        arm.moveToCartesianPose(0.028, -0.145, 0.139, 
-                            -0.289, -0.407, -0.674, 0.544);
-                            
-                    } else if (scene_object == manipulable_object && object_placed) {
-                        RCLCPP_INFO(node->get_logger(), "Matched object found again, but already placed the manipulable object.");
-                    }
-                }
-                current_box_idx++;
-            } else {
-                all_boxes_visited = true;
-                if (!object_placed) {
-                    RCLCPP_WARN(node->get_logger(),
-                                "All boxes have been visited without successfully placing the object. Returning home.");
-                    if (outfile.is_open()) {
-                        outfile << "WARNING: All boxes visited; manipulable object was not placed. Returning home."
-                                << std::endl;
-                    }
-                } else {
-                    RCLCPP_INFO(node->get_logger(), "All boxes visited and manipulable object placed! Returning home.");
-                }
-                return_home = true;
-            }
-        }
-        else if (return_home) {
-            // 3. Return to Start
-            RCLCPP_INFO(node->get_logger(), "Returning to starting location at (%.2f, %.2f, %.2f)", start_x, start_y, start_phi);
-            if (nav.moveToGoal(start_x, start_y, start_phi)) {
-                RCLCPP_INFO(node->get_logger(), "Successfully returned to the starting location. Mission complete!");
-            } else {
-                RCLCPP_ERROR(node->get_logger(), "Failed to return to the starting location!");
-            }
-            break; // Exit the loop
-        }
 
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
