@@ -69,7 +69,7 @@ int main(int argc, char** argv) {
     // Initialize helper objects
     Navigation nav(node);
     YoloInterface yolo(node);
-    // ArmController arm(node);
+    ArmController arm(node);
     AprilTagDetector apriltag(node);
 
     std::ofstream outfile("contest2_output.txt", std::ios_base::app);
@@ -145,8 +145,7 @@ int main(int argc, char** argv) {
     bool return_home = false;
     std::string manipulable_object = "cup";
     bool all_boxes_visited = false;
-    bool manipulate = false;
-    bool use_nav2_for_tag_align = false;
+    bool manipulate = true;
 
     // OAK-D scene objects are single-use: once detected confidently, we stop looking for that class.
     const std::vector<std::string> scene_class_order = {
@@ -244,37 +243,55 @@ int main(int argc, char** argv) {
         // }
 
         /***YOUR CODE HERE***/
-        // if (!pickup_done) {
-        //     // 1. Detection and Pickup
+        if (!pickup_done) {
+            // 1. Detection and Pickup
             
-        //     // STILL WORKING ON ARM POSES
+            arm.openGripper();
+            // Position just above the cup
+            arm.moveToCartesianPose(0.142, -0.019, 0.181,
+                -0.016, 0.108, -0.114, 0.987);
 
-        //     RCLCPP_INFO(node->get_logger(), "Moving arm to pickup position");
-        //     arm.openGripper();
-        //     if (arm.moveToCartesianPose(0.151, -0.013, 0.155, -0.005, 0.139, 0.037, 0.990)) {
-        //         arm.closeGripper();
-        //         RCLCPP_INFO(node->get_logger(), "Object picked up successfully.");
-        //         RCLCPP_INFO(node->get_logger(), "Attempting to detect manipulable object with WRIST camera");
-        //         // Save the image once we take the selfie
-        //         manipulable_object = yolo.getObjectName(CameraSource::WRIST, true);
+            // Move down to grasp the cup
+            arm.moveToCartesianPose(0.126, -0.018, 0.152,
+                0.001, -0.009, -0.110, 0.994);
 
-        //         if (manipulable_object.empty()) {
-        //             RCLCPP_WARN(node->get_logger(), "Failed to detect manipulable object. NOT Retrying...");
-        //             std::this_thread::sleep_for(std::chrono::seconds(1));
-        //         }
+            arm.closeGripper();
 
-        //         float confidence = yolo.getConfidence();
-        //         RCLCPP_INFO(node->get_logger(), "Detected manipulable object: %s (confidence: %.2f)", manipulable_object.c_str(), confidence);
+            // Position just above the cup
+            arm.moveToCartesianPose(0.142, -0.019, 0.181,
+                -0.016, 0.108, -0.114, 0.987);
 
-        //         // Move arm to a safe carry position (done)
-        //         arm.moveToCartesianPose(0.019, -0.278, 0.243, -0.468, -0.462, -0.533, 0.533);  // home/carry position
-        //     } else {
-        //         RCLCPP_ERROR(node->get_logger(), "Failed to move arm to pickup position!");
-        //     }
+            // Intermediate safe position
+            arm.moveToCartesianPose(0.028, -0.145, 0.139, 
+                -0.289, -0.407, -0.674, 0.544);
 
-        //     pickup_done = true;
-        // }
-        if (!all_boxes_visited && !return_home) {
+            // Move to a position where the OAKD camera can see the cup
+            arm.moveToCartesianPose(0.018, -0.311, 0.097, 
+                -0.073, 0.049, 0.544, 0.835);
+
+            static uint64_t lastYoloTime = 0;
+            static int yolo_detections = 0;
+            if (yolo_detections < 2) {
+                RCLCPP_INFO(node->get_logger(), "Attempting YOLO (OAKD Camera) detection %d at %lu seconds", yolo_detections + 1, secondsElapsed);
+                std::string detected = yolo.getObjectName(CameraSource::OAKD, true);
+
+                if (!detected.empty()) {
+                    float confidence = yolo.getConfidence();
+                    RCLCPP_INFO(node->get_logger(), "YOLO detected: %s with confidence %.2f", detected.c_str(), confidence);
+                } else {
+                    RCLCPP_INFO(node->get_logger(), "YOLO did not detect any objects");
+                }
+                yolo_detections++;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+            // Intermediate safe position (carry position)
+            arm.moveToCartesianPose(0.028, -0.145, 0.139, 
+                -0.289, -0.407, -0.674, 0.544);
+
+            pickup_done = true;
+
+        } else if (!all_boxes_visited && !return_home) {
             // 2. Navigation, Identification, and Placement
             if (current_box_idx < boxes.coords.size()) {
                 double box_x = boxes.coords[current_box_idx][0];
@@ -460,98 +477,80 @@ int main(int argc, char** argv) {
                             double error_x = tag_x - desired_distance_x;
                             double error_y = tag_y - desired_distance_y;
 
-                            if (use_nav2_for_tag_align) {
-                                // Variation 1: Use Nav2
-                                RCLCPP_INFO(node->get_logger(), "Using Nav2 to align with tag...");
+                            RCLCPP_INFO(node->get_logger(), "Using Control Loop to align with tag...");
 
-                                // Calculate global pose
-                                // tag_x and tag_y are in base_link.
-                                // To move base_link by (error_x, error_y):
-                                double goal_x = robotPose.x + error_x * cos(robotPose.phi) - error_y * sin(robotPose.phi);
-                                double goal_y = robotPose.y + error_x * sin(robotPose.phi) + error_y * cos(robotPose.phi);
-                                double goal_phi = robotPose.phi; // Keep current orientation or face the tag
+                            const double kP_linear = 0.5;
+                            const double kP_angular = 1.0;
+                            const double dist_tolerance = 0.05;
+                            const double angle_tolerance = 0.05;
 
-                                RCLCPP_INFO(node->get_logger(), "Aligning to global pose: x=%.2f, y=%.2f", goal_x, goal_y);
-                                if (!nav.moveToGoal(goal_x, goal_y, goal_phi)) {
-                                    RCLCPP_WARN(node->get_logger(), "Failed to align using Nav2!");
+                            rclcpp::Rate loop_rate(10); // 10 Hz
+                            auto align_start = std::chrono::system_clock::now();
+
+                            while (rclcpp::ok()) {
+                                auto align_now = std::chrono::system_clock::now();
+                                if (std::chrono::duration_cast<std::chrono::seconds>(align_now - align_start).count() > 10) {
+                                    RCLCPP_WARN(node->get_logger(), "Alignment timeout!");
+                                    break;
                                 }
-                            } else {
-                                // Variation 2: Use Control Loop
-                                RCLCPP_INFO(node->get_logger(), "Using Control Loop to align with tag...");
 
-                                const double kP_linear = 0.5;
-                                const double kP_angular = 1.0;
-                                const double dist_tolerance = 0.05;
-                                const double angle_tolerance = 0.05;
-
-                                rclcpp::Rate loop_rate(10); // 10 Hz
-                                auto align_start = std::chrono::system_clock::now();
-
-                                while (rclcpp::ok()) {
-                                    auto align_now = std::chrono::system_clock::now();
-                                    if (std::chrono::duration_cast<std::chrono::seconds>(align_now - align_start).count() > 10) {
-                                        RCLCPP_WARN(node->get_logger(), "Alignment timeout!");
-                                        break;
-                                    }
-
-                                    // Refresh tag pose
-                                    auto current_tag_pose_opt = apriltag.getTagPose(visible_tags[0]);
-                                    if (!current_tag_pose_opt.has_value()) {
-                                        RCLCPP_WARN(node->get_logger(), "Lost sight of tag during alignment!");
-                                        break;
-                                    }
-
-                                    auto current_tag_pose = current_tag_pose_opt.value();
-                                    double curr_tag_x = current_tag_pose.position.x;
-                                    double curr_tag_y = current_tag_pose.position.y;
-
-                                    double err_x = curr_tag_x - desired_distance_x;
-                                    // In addition to lateral error (Y), let's calculate the heading error to ensure we are facing the tag squarely.
-                                    // The tag's orientation in base_link tells us how much we need to rotate to face it.
-
-                                    // Get yaw from quaternion
-                                    tf2::Quaternion q(
-                                        current_tag_pose.orientation.x,
-                                        current_tag_pose.orientation.y,
-                                        current_tag_pose.orientation.z,
-                                        current_tag_pose.orientation.w);
-                                    tf2::Matrix3x3 m(q);
-                                    double roll, pitch, yaw;
-                                    m.getRPY(roll, pitch, yaw);
-
-                                    // yaw is the angle of the tag's Z-axis (forward) relative to our X-axis.
-                                    // If we want to face the tag directly, our desired relative yaw should be pi or -pi (depending on tag orientation convention)
-                                    // Wait, the tag's Z axis normally points OUT of the tag. If we want to face it, the tag's Z should point towards us (180 degrees from our X).
-                                    // Or simply use the tag's relative X and Y to compute the angle we need to turn: atan2(Y, X).
-                                    // The lateral error (Y) gets smaller as we point towards it, but we could be pointing towards it while being offset sideways.
-                                    // Using atan2(Y, X) is a simple heading controller. Let's use that as the primary angular error.
-
-                                    double heading_error = std::atan2(curr_tag_y, curr_tag_x);
-                                    double err_y = curr_tag_y - desired_distance_y;
-
-                                    if (std::abs(err_x) < dist_tolerance && std::abs(heading_error) < angle_tolerance) {
-                                        RCLCPP_INFO(node->get_logger(), "Successfully aligned with tag.");
-                                        break;
-                                    }
-
-                                    geometry_msgs::msg::TwistStamped cmd;
-                                    cmd.header.stamp = node->now();
-                                    // Move forward/backward based on error in X
-                                    cmd.twist.linear.x = kP_linear * err_x;
-                                    // Rotate to correct heading error (pointing towards the tag)
-                                    cmd.twist.angular.z = kP_angular * heading_error;
-
-                                    // Cap speeds
-                                    if (cmd.twist.linear.x > 0.2) cmd.twist.linear.x = 0.2;
-                                    if (cmd.twist.linear.x < -0.2) cmd.twist.linear.x = -0.2;
-                                    if (cmd.twist.angular.z > 0.5) cmd.twist.angular.z = 0.5;
-                                    if (cmd.twist.angular.z < -0.5) cmd.twist.angular.z = -0.5;
-
-                                    vel_pub->publish(cmd);
-
-                                    rclcpp::spin_some(node);
-                                    loop_rate.sleep();
+                                // Refresh tag pose
+                                auto current_tag_pose_opt = apriltag.getTagPose(visible_tags[0]);
+                                if (!current_tag_pose_opt.has_value()) {
+                                    RCLCPP_WARN(node->get_logger(), "Lost sight of tag during alignment!");
+                                    break;
                                 }
+
+                                auto current_tag_pose = current_tag_pose_opt.value();
+                                double curr_tag_x = current_tag_pose.position.x;
+                                double curr_tag_y = current_tag_pose.position.y;
+
+                                double err_x = curr_tag_x - desired_distance_x;
+                                // In addition to lateral error (Y), let's calculate the heading error to ensure we are facing the tag squarely.
+                                // The tag's orientation in base_link tells us how much we need to rotate to face it.
+
+                                // Get yaw from quaternion
+                                tf2::Quaternion q(
+                                    current_tag_pose.orientation.x,
+                                    current_tag_pose.orientation.y,
+                                    current_tag_pose.orientation.z,
+                                    current_tag_pose.orientation.w);
+                                tf2::Matrix3x3 m(q);
+                                double roll, pitch, yaw;
+                                m.getRPY(roll, pitch, yaw);
+
+                                // yaw is the angle of the tag's Z-axis (forward) relative to our X-axis.
+                                // If we want to face the tag directly, our desired relative yaw should be pi or -pi (depending on tag orientation convention)
+                                // Wait, the tag's Z axis normally points OUT of the tag. If we want to face it, the tag's Z should point towards us (180 degrees from our X).
+                                // Or simply use the tag's relative X and Y to compute the angle we need to turn: atan2(Y, X).
+                                // The lateral error (Y) gets smaller as we point towards it, but we could be pointing towards it while being offset sideways.
+                                // Using atan2(Y, X) is a simple heading controller. Let's use that as the primary angular error.
+
+                                double heading_error = std::atan2(curr_tag_y, curr_tag_x);
+                                double err_y = curr_tag_y - desired_distance_y;
+
+                                if (std::abs(err_x) < dist_tolerance && std::abs(heading_error) < angle_tolerance) {
+                                    RCLCPP_INFO(node->get_logger(), "Successfully aligned with tag.");
+                                    break;
+                                }
+
+                                geometry_msgs::msg::TwistStamped cmd;
+                                cmd.header.stamp = node->now();
+                                // Move forward/backward based on error in X
+                                cmd.twist.linear.x = kP_linear * err_x;
+                                // Rotate to correct heading error (pointing towards the tag)
+                                cmd.twist.angular.z = kP_angular * heading_error;
+
+                                // Cap speeds
+                                if (cmd.twist.linear.x > 0.2) cmd.twist.linear.x = 0.2;
+                                if (cmd.twist.linear.x < -0.2) cmd.twist.linear.x = -0.2;
+                                if (cmd.twist.angular.z > 0.5) cmd.twist.angular.z = 0.5;
+                                if (cmd.twist.angular.z < -0.5) cmd.twist.angular.z = -0.5;
+
+                                vel_pub->publish(cmd);
+
+                                rclcpp::spin_some(node);
+                                loop_rate.sleep();
 
                                 // Stop robot
                                 geometry_msgs::msg::TwistStamped stop_cmd;
@@ -563,49 +562,23 @@ int main(int argc, char** argv) {
                         } else {
                             RCLCPP_WARN(node->get_logger(), "Failed to get pose for visible tag %d!", visible_tags[0]);
                         }
-                    }
-                    else {
+                    } else {
                         RCLCPP_WARN(node->get_logger(), "Cup detected but no AprilTag found for the bin at box %d!", current_box_idx);
                     }
-                    // // Check if it matches the manipulable object, and only place if not placed yet
-                        // if (scene_object == manipulable_object && !object_placed) {
-                        //     RCLCPP_INFO(node->get_logger(), "MATCH FOUND! Manipulable object matches scene object.");
+                    // Check if it matches the manipulable object, if aligned with apriltag (TODO) and only place if not placed 
+                    if (scene_object == manipulable_object && !object_placed) {
+                        RCLCPP_INFO(node->get_logger(), "MATCH FOUND! Manipulable object matches scene object.");
+                        
+                        // Home Position (also drop position!)
+                        arm.moveToCartesianPose(0.023, -0.277, 0.246, 
+                            -0.464, -0.474, -0.529, 0.529);
 
-                        //     // Look for AprilTags for the bin
-                        //     std::vector<int> candidate_tags = {0, 1, 2, 3, 4};
-                        //     std::vector<int> visible_tags = apriltag.getVisibleTags(candidate_tags, 100);
+                        arm.openGripper();
 
-                        //     // TODO: Still not doing anything with april tags. Could use tf to determine exact bin location and update drop pose accordingly, but for now just check if any tag is visible at all as a proxy for "is the bin in front of us"
-                        //     if (!visible_tags.empty()) {
-                        //         RCLCPP_INFO(node->get_logger(), "Found bin with AprilTag ID: %d. Placing object.", visible_tags[0]);
-
-                        //         // TODO: Update values for drop_pose (x, y, z, qx, qy, qz, qw) (could just be home/carry position)
-                        //         double drop_x = 0.4;
-                        //         double drop_y = 0.0;
-                        //         double drop_z = 0.2;
-                        //         // Use a valid, normalized quaternion (identity orientation)
-                        //         double drop_qx = 0.0;
-                        //         double drop_qy = 0.0;
-                        //         double drop_qz = 0.0;
-                        //         double drop_qw = 1.0;
-
-                        //         if (arm.moveToCartesianPose(drop_x, drop_y, drop_z, drop_qx, drop_qy, drop_qz, drop_qw)) {
-                        //             arm.openGripper();
-                        //             RCLCPP_INFO(node->get_logger(), "Object placed successfully in the bin!");
-
-                        //             // Move arm back to carry/rest position
-                        //             arm.moveToCartesianPose(0.019, -0.278, 0.243, -0.468, -0.462, -0.533, 0.533);  // home/carry position
-
-                        //             object_placed = true;
-                        //         } else {
-                        //             RCLCPP_ERROR(node->get_logger(), "Failed to move arm to drop position!");
-                        //         }
-                        //     } else {
-                        //         RCLCPP_WARN(node->get_logger(), "Matched object, but no AprilTag found for the bin!");
-                        //     }
-                        // } else if (scene_object == manipulable_object && object_placed) {
-                        //     RCLCPP_INFO(node->get_logger(), "Matched object found again, but already placed the manipulable object.");
-                        // }
+                        }
+                    } else if (scene_object == manipulable_object && object_placed) {
+                        RCLCPP_INFO(node->get_logger(), "Matched object found again, but already placed the manipulable object.");
+                    }
                 }
                 current_box_idx++;
             } else {
