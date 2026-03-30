@@ -26,6 +26,21 @@ Run colcon build only after in the ros workspace folder (cd ros2_ws)
 5. Run `ros2 launch turtlebot4_navigation nav2.launch.py`, wait for it to finish launching
 6. Run `ros2 run mie443_contest2 contest2`
 
+### CONTEST ROOM
+1. ssh into robot: run `ssh ubuntu@100.69.127.157`
+    - run `ros2 run mie443_contest2 image_capture_server`
+2. on laptop terminal: run `source ~/contest2/bin/activate`
+    - run `ros2 run mie443_contest2 yolo_detector.py`
+3. ssh into robot: run `ssh ubuntu@100.69.127.157`
+    - run `ros2 launch apriltag_ros camera_36h11.launch.yml`
+4. ssh into robot: run `ssh ubuntu@100.69.127.157`
+    - run `source contest2/bin/activate`
+    - run `ros2 launch lerobot_moveit so101_turtlebot.launch.py`
+5. run `ros2 launch lerobot_moveit so101_laptop.launch.py`
+6. Put the robot in the contest space. Run `ros2 launch turtlebot4_navigation localization.launch.py map:=/home/turtlebot/ros2_ws/src/contest2/mie443_contest2/maps/Contest2MapPractice.yaml`. WAIT FOR STARTUP
+7. Run `ros2 launch turtlebot4_viz view_navigation.launch.py`, wait a little, then set the initial pose in rviz. 
+8. Run `ros2 launch turtlebot4_navigation nav2.launch.py`, wait for it to finish launching
+9. Run `ros2 run mie443_contest2 contest2`
 
 ### Other TODOs if time:
 

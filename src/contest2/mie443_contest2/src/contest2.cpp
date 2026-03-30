@@ -143,7 +143,6 @@ int main(int argc, char** argv) {
     bool object_placed = false;
     int current_box_idx = 0;
     bool return_home = false;
-    bool aligned_to_tag = false; 
     std::string manipulable_object = "cup";
     bool all_boxes_visited = false;
     bool manipulate = true;
@@ -186,12 +185,12 @@ int main(int argc, char** argv) {
             RCLCPP_INFO(node->get_logger(),
                         "Ignoring already checked-off object '%s' (%.2f) during %s.",
                         scene_object.c_str(), confidence, context_label.c_str());
-            if (outfile.is_open()) {
-                outfile << "Box " << current_box_idx << " at ("
-                        << log_x << ", " << log_y << ", " << log_phi << "): "
-                        << "IGNORED checked-off object " << scene_object
-                        << " (confidence: " << confidence << ", " << context_label << ")" << std::endl;
-            }
+            // if (outfile.is_open()) {
+            //     outfile << "Box " << current_box_idx << " at ("
+            //             << log_x << ", " << log_y << ", " << log_phi << "): "
+            //             << "IGNORED checked-off object " << scene_object
+            //             << " (confidence: " << confidence << ", " << context_label << ")" << std::endl;
+            // }
             return false;
         }
 
@@ -206,8 +205,8 @@ int main(int argc, char** argv) {
                     << log_x << ", " << log_y << ", " << log_phi << "): "
                     << scene_object << " (confidence: " << confidence << ", " << context_label << ")"
                     << std::endl;
-            outfile << "CHECKED_OFF: " << scene_object
-                    << " | Remaining: [" << format_remaining_scene_objects() << "]" << std::endl;
+            // outfile << "CHECKED_OFF: " << scene_object
+            //         << " | Remaining: [" << format_remaining_scene_objects() << "]" << std::endl;
         }
 
         if (scene_object == manipulable_object && !object_placed) {
@@ -293,7 +292,8 @@ int main(int argc, char** argv) {
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
             // Intermediate safe position (carry position)
-            arm.moveToCartesianPose(0.028, -0.156, 0.243,-0.219, -0.303, -0.721, 0.584)
+            arm.moveToCartesianPose(0.028, -0.156, 0.243,
+                -0.219, -0.303, -0.721, 0.584);
 
             pickup_done = true;
 
@@ -376,12 +376,12 @@ int main(int argc, char** argv) {
 
                                 RCLCPP_WARN(node->get_logger(), "No usable scene object detected at box %d during %s %s step %d.",
                                             current_box_idx, attempt_label.c_str(), phase.c_str(), step_idx);
-                                if (outfile.is_open()) {
-                                    outfile << "Box " << current_box_idx << " at ("
-                                            << scan_target_x << ", " << scan_target_y << ", " << scan_target_phi << "): "
-                                            << "None usable detected (" << attempt_label << " " << phase
-                                            << " step " << step_idx << ")" << std::endl;
-                                }
+                                // if (outfile.is_open()) {
+                                //     outfile << "Box " << current_box_idx << " at ("
+                                //             << scan_target_x << ", " << scan_target_y << ", " << scan_target_phi << "): "
+                                //             << "None usable detected (" << attempt_label << " " << phase
+                                //             << " step " << step_idx << ")" << std::endl;
+                                // }
                                 return false;
                             };
 
@@ -506,7 +506,7 @@ int main(int argc, char** argv) {
                             // }
 
                             int tag_id = visible_tags.front();
-                            auto tag_tf_opt = aprilTagDetector.getTagTransform(tag_id, 50);
+                            auto tag_tf_opt = apriltag.getTagTransform(tag_id, 50);
                             if (!tag_tf_opt.has_value()) {
                                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
                                 continue;
@@ -566,7 +566,8 @@ int main(int argc, char** argv) {
                         object_placed = true;
 
                         // Intermediate safe position (carry position)
-                        arm.moveToCartesianPose(0.028, -0.156, 0.243,-0.219, -0.303, -0.721, 0.584)
+                        arm.moveToCartesianPose(0.028, -0.156, 0.243,
+                            -0.219, -0.303, -0.721, 0.584);
                             
                     } else if (scene_object == manipulable_object && object_placed) {
                         RCLCPP_INFO(node->get_logger(), "Matched object found again, but already placed the manipulable object.");
