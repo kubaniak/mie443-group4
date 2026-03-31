@@ -8,6 +8,8 @@ To preview this file: Ctrl+Shift+V
     - (DONE) Added panning behavior to turn side to side and retry YOLO detection.
     - Still have a fallback (if it takes more than 30 sec? continue. We missed that object)
     - (DONE) outfile is opened once and remains open instead of being overwritten (or use append mode: std::ios_base::app if reopening is needed, though currently it is open the whole time).
+    - (DONE) Added arm gripper move and release (pickup logic with OAKD view position).
+    - (DONE) New safe carry position for the arm after pickup.
 
 
     - Optional: Retry if time remaining, only visiting locations where no object was yolo'd
@@ -55,4 +57,5 @@ Run colcon build only after in the ros workspace folder (cd ros2_ws)
 ### TO EXPERIMENT ON SITE
 - Test the new 0.7m box offset for navigation and facing objects.
 - Evaluate the two new AprilTag alignment variations for bin placement: Nav2 vs. Control Loop (`use_nav2_for_tag_align`).
-- Tune/uncomment exact bin drop position logic (`drop_pose` values in `contest2.cpp`).
+- Evaluate the exact bin drop position logic and the new safe carry position for navigation.
+- Verify pickup sequence and OAKD camera view position clears the robot footprint.
