@@ -56,3 +56,4 @@ Run colcon build only after in the ros workspace folder (cd ros2_ws)
 - Test the new 0.7m box offset for navigation and facing objects.
 - Evaluate the two new AprilTag alignment variations for bin placement: Nav2 vs. Control Loop (`use_nav2_for_tag_align`).
 - Tune/uncomment exact bin drop position logic (`drop_pose` values in `contest2.cpp`).
+- Test the recent fix for the blocking YOLO behavior.
