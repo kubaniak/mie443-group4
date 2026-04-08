@@ -6,6 +6,7 @@ To preview this file: Ctrl+Shift+V
     - We navigate and face the objects with an offset of 0.7. This worked quite fine, but it can be tweaked.
 - What we want:
     - (DONE) Added panning behavior to turn side to side and retry YOLO detection.
+    - (DONE) Added fallback behavior where if the initial scan misses, the robot moves 0.3m closer and tries panning again.
     - Still have a fallback (if it takes more than 30 sec? continue. We missed that object)
     - (DONE) outfile is opened once and remains open instead of being overwritten (or use append mode: std::ios_base::app if reopening is needed, though currently it is open the whole time).
 
@@ -54,5 +55,6 @@ Run colcon build only after in the ros workspace folder (cd ros2_ws)
 
 ### TO EXPERIMENT ON SITE
 - Test the new 0.7m box offset for navigation and facing objects.
+- Test the new 0.3m closer offset fallback for YOLO detection and tune if needed.
 - Evaluate the two new AprilTag alignment variations for bin placement: Nav2 vs. Control Loop (`use_nav2_for_tag_align`).
 - Tune/uncomment exact bin drop position logic (`drop_pose` values in `contest2.cpp`).
